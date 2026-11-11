@@ -5,16 +5,19 @@ import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import coil.size.Scale
+import com.example.piphotos.media.FrostedGlassHelper
 import com.example.piphotos.media.LocalMediaItem
 import java.util.Locale
 
@@ -122,16 +125,32 @@ class PhotoPagerAdapter(
         private val tvDurationBadge: TextView = itemView.findViewById(R.id.tvDurationBadge)
         private val btnCenterPlayPause: FrameLayout = itemView.findViewById(R.id.btnCenterPlayPause)
         private val ivCenterPlayPause: ImageView = itemView.findViewById(R.id.ivCenterPlayPause)
+        private val btnRewind10: FrameLayout = itemView.findViewById(R.id.btnRewind10)
+        private val btnForward10: FrameLayout = itemView.findViewById(R.id.btnForward10)
         private val videoBottomControls: View = itemView.findViewById(R.id.videoBottomControls)
         private val videoSeekBar: SeekBar = itemView.findViewById(R.id.videoSeekBar)
         private val tvCurrentTime: TextView = itemView.findViewById(R.id.tvCurrentTime)
-        private val tvStreamBadge: TextView = itemView.findViewById(R.id.tvStreamBadge)
         private val tvTotalDuration: TextView = itemView.findViewById(R.id.tvTotalDuration)
+        private val btnPlaybackSpeed: TextView = itemView.findViewById(R.id.btnPlaybackSpeed)
+        private val btnMuteToggle: ImageView = itemView.findViewById(R.id.btnMuteToggle)
 
         private val handler = Handler(Looper.getMainLooper())
         private var boundPlayer: ExoPlayer? = null
         private var currentItem: LocalMediaItem? = null
         private var isUserTrackingTouch = false
+        private var isMuted = false
+        private var currentSpeedIndex = 1 // 1.0x default
+        private val speedOptions = floatArrayOf(0.5f, 1.0f, 1.5f, 2.0f)
+
+        private val autoHideRunnable = Runnable {
+            if (boundPlayer?.isPlaying == true) {
+                videoOverlayContainer.animate()
+                    .alpha(0f)
+                    .setDuration(220L)
+                    .withEndAction { videoOverlayContainer.visibility = View.GONE }
+                    .start()
+            }
+        }
 
         private val progressUpdateRunnable = object : Runnable {
             override fun run() {
@@ -155,8 +174,11 @@ class PhotoPagerAdapter(
                 updatePlayPauseIcon(isPlaying)
                 if (isPlaying) {
                     handler.post(progressUpdateRunnable)
+                    scheduleAutoHide()
                 } else {
                     handler.removeCallbacks(progressUpdateRunnable)
+                    cancelAutoHide()
+                    setOverlayControlsVisible(true)
                 }
             }
 
@@ -175,14 +197,16 @@ class PhotoPagerAdapter(
 
         init {
             zoomImageView.onSingleTapListener = { onSingleTap() }
-            // Report WHICH page changed so the activity can ignore off-screen pages that are only
-            // being bound / recycled (they must not unlock or lock the visible page).
             zoomImageView.onZoomStateChanged = { zoomed ->
                 val pos = bindingAdapterPosition
                 if (pos != RecyclerView.NO_POSITION) onZoomStateChanged(pos, zoomed)
             }
 
+            // Apply Apple glass effect to video bottom scrubber bar
+            FrostedGlassHelper.applyGlass(videoBottomControls, blurRadiusDp = 20f)
+
             btnCenterPlayPause.setOnClickListener {
+                resetAutoHide()
                 val player = boundPlayer ?: return@setOnClickListener
                 if (player.isPlaying) {
                     player.pause()
@@ -194,6 +218,37 @@ class PhotoPagerAdapter(
                 }
             }
 
+            btnRewind10.setOnClickListener {
+                resetAutoHide()
+                val player = boundPlayer ?: return@setOnClickListener
+                val target = (player.currentPosition - 10000L).coerceAtLeast(0L)
+                player.seekTo(target)
+            }
+
+            btnForward10.setOnClickListener {
+                resetAutoHide()
+                val player = boundPlayer ?: return@setOnClickListener
+                val target = (player.currentPosition + 10000L).coerceAtMost(player.duration)
+                player.seekTo(target)
+            }
+
+            btnMuteToggle.setOnClickListener {
+                resetAutoHide()
+                val player = boundPlayer ?: return@setOnClickListener
+                isMuted = !isMuted
+                player.volume = if (isMuted) 0f else 1f
+                btnMuteToggle.setImageResource(if (isMuted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
+            }
+
+            btnPlaybackSpeed.setOnClickListener {
+                resetAutoHide()
+                val player = boundPlayer ?: return@setOnClickListener
+                currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
+                val newSpeed = speedOptions[currentSpeedIndex]
+                player.playbackParameters = PlaybackParameters(newSpeed)
+                btnPlaybackSpeed.text = String.format(Locale.US, "%.1fx", newSpeed)
+            }
+
             videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) {
@@ -203,6 +258,7 @@ class PhotoPagerAdapter(
 
                 override fun onStartTrackingTouch(seekBar: SeekBar?) {
                     isUserTrackingTouch = true
+                    cancelAutoHide()
                 }
 
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
@@ -210,8 +266,28 @@ class PhotoPagerAdapter(
                     val player = boundPlayer ?: return
                     val targetMs = seekBar?.progress?.toLong() ?: 0L
                     player.seekTo(targetMs)
+                    scheduleAutoHide()
                 }
             })
+
+            itemView.setOnClickListener {
+                onSingleTap()
+            }
+        }
+
+        private fun scheduleAutoHide() {
+            handler.removeCallbacks(autoHideRunnable)
+            handler.postDelayed(autoHideRunnable, 2500L)
+        }
+
+        private fun cancelAutoHide() {
+            handler.removeCallbacks(autoHideRunnable)
+        }
+
+        private fun resetAutoHide() {
+            if (boundPlayer?.isPlaying == true) {
+                scheduleAutoHide()
+            }
         }
 
         fun isZoomed(): Boolean = zoomImageView.isZoomed
@@ -228,7 +304,6 @@ class PhotoPagerAdapter(
                 zoomImageView.visibility = View.GONE
                 playerView.visibility = View.VISIBLE
                 videoOverlayContainer.visibility = if (areControlsVisible) View.VISIBLE else View.GONE
-                tvStreamBadge.text = item.mimeType.substringAfter("/")
                 val initialDuration = item.durationMs
                 tvTotalDuration.text = formatMs(initialDuration)
                 tvDurationBadge.text = formatMs(initialDuration)
@@ -240,16 +315,29 @@ class PhotoPagerAdapter(
                 videoOverlayContainer.visibility = View.GONE
                 zoomImageView.visibility = View.VISIBLE
 
-                // Drop the previous photo first: a recycled holder still holds the last image, and
-                // its size must never be used to place the new one.
+                // Drop previous photo first to prevent incorrect sizing
                 zoomImageView.setImageDrawable(null)
 
-                // Decode at most 2048px on the long side (never the raw 48MP bitmap). No crossfade
-                // and no placeholder: the zoom view recomputes the fit-center matrix every time the
-                // drawable changes, so the whole image is visible as soon as it arrives.
+                // Decelerate scale (0.985 -> 1.0) and crossfade transition without black frame
+                zoomImageView.scaleX = 0.985f
+                zoomImageView.scaleY = 0.985f
+                zoomImageView.alpha = 0.7f
+
                 zoomImageView.load(item.contentUri) {
                     size(2048, 2048)
                     scale(Scale.FIT)
+                    crossfade(280)
+                    listener(
+                        onSuccess = { _, _ ->
+                            zoomImageView.animate()
+                                .scaleX(1.0f)
+                                .scaleY(1.0f)
+                                .alpha(1.0f)
+                                .setDuration(280L)
+                                .setInterpolator(DecelerateInterpolator())
+                                .start()
+                        }
+                    )
                     error(R.color.surface_card)
                 }
             }
@@ -272,10 +360,12 @@ class PhotoPagerAdapter(
             updatePlayPauseIcon(player.isPlaying)
             if (player.isPlaying) {
                 handler.post(progressUpdateRunnable)
+                scheduleAutoHide()
             }
         }
 
         fun unbindPlayer() {
+            cancelAutoHide()
             handler.removeCallbacks(progressUpdateRunnable)
             boundPlayer?.removeListener(playerListener)
             if (playerView.player != null) {
@@ -294,7 +384,19 @@ class PhotoPagerAdapter(
         fun setOverlayControlsVisible(visible: Boolean) {
             val item = currentItem ?: return
             if (item.isVideo) {
-                videoOverlayContainer.visibility = if (visible) View.VISIBLE else View.GONE
+                if (visible) {
+                    cancelAutoHide()
+                    videoOverlayContainer.visibility = View.VISIBLE
+                    videoOverlayContainer.animate().alpha(1f).setDuration(200L).start()
+                    if (boundPlayer?.isPlaying == true) {
+                        scheduleAutoHide()
+                    }
+                } else {
+                    cancelAutoHide()
+                    videoOverlayContainer.animate().alpha(0f).setDuration(200L).withEndAction {
+                        videoOverlayContainer.visibility = View.GONE
+                    }.start()
+                }
             }
         }
 

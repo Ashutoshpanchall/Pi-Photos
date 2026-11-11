@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Base frosted scrim (70% black on older APIs, glass tint on API 31+) -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#B3000000" />
+        </shape>
+    </item>
+    <!-- Hairline bottom border: 0.5dp (1dp rounded) with 12% white alpha -->
+    <item android:bottom="0dp">
+        <shape android:shape="rectangle">
+            <stroke
+                android:width="1dp"
+                android:color="#1FFFFFFF" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+</layer-list>

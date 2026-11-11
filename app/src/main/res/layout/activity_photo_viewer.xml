@@ -6,7 +6,7 @@
     android:layout_height="match_parent"
     android:background="@color/black">
 
-    <!-- Interactive Downward Swipe-to-Dismiss Container -->
+    <!-- Interactive Downward Swipe-to-Dismiss Container (Full Bleed Edge-to-Edge) -->
     <com.example.piphotos.SwipeDismissContainer
         android:id="@+id/swipeDismissContainer"
         android:layout_width="match_parent"
@@ -16,19 +16,19 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
-        <!-- Full Gallery Horizontal ViewPager2 -->
+        <!-- Full Gallery Horizontal ViewPager2 (Square media, unclipped, letterboxed in black) -->
         <androidx.viewpager2.widget.ViewPager2
             android:id="@+id/viewPager"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
     </com.example.piphotos.SwipeDismissContainer>
 
-    <!-- Top Action Bar Overlay with Dedicated Status Bar Spacer -->
+    <!-- Top Action Bar (Apple-style frosted glass with hairline bottom border) -->
     <LinearLayout
         android:id="@+id/topBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#99000000"
+        android:background="@drawable/bg_glass_chrome_top"
         android:orientation="vertical"
         app:layout_constraintTop_toTopOf="parent">
 
@@ -40,8 +40,8 @@
         <RelativeLayout
             android:layout_width="match_parent"
             android:layout_height="56dp"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp">
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
 
             <!-- Back Arrow -->
             <ImageView
@@ -56,7 +56,7 @@
                 android:src="@drawable/ic_arrow_back"
                 app:tint="@color/white" />
 
-            <!-- Center Date & Time Header (Tappable for EXIF / Details Sheet) -->
+            <!-- Center Date & Time Header (from actual capture timestamp) -->
             <LinearLayout
                 android:id="@+id/layoutDateHeader"
                 android:layout_width="wrap_content"
@@ -70,40 +70,26 @@
                 android:paddingEnd="12dp"
                 android:paddingBottom="4dp">
 
-                <LinearLayout
+                <TextView
+                    android:id="@+id/tvViewerDate"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:id="@+id/tvViewerDate"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="1 Nov"
-                        android:textColor="@color/white"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <ImageView
-                        android:layout_width="14dp"
-                        android:layout_height="14dp"
-                        android:layout_marginStart="2dp"
-                        android:src="@drawable/ic_chevron_right"
-                        app:tint="#B3FFFFFF" />
-                </LinearLayout>
+                    android:text="3 Mar 2026"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/tvViewerTime"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="1dp"
-                    android:text="10:20 am"
+                    android:text="3:14 am"
                     android:textColor="#B3FFFFFF"
                     android:textSize="11sp" />
             </LinearLayout>
 
-            <!-- Right Actions: Favorites Star + 3-Dots Menu -->
+            <!-- Right Actions: Cast + Heart / Favorite + More Menu -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -113,20 +99,29 @@
                 android:orientation="horizontal">
 
                 <ImageView
+                    android:id="@+id/btnCast"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Cast media"
+                    android:padding="9dp"
+                    android:src="@drawable/ic_cast"
+                    app:tint="@color/white" />
+
+                <ImageView
                     android:id="@+id/btnFavoriteStar"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Favorite photo"
                     android:padding="8dp"
-                    android:src="@drawable/ic_star_outline"
+                    android:src="@drawable/ic_heart"
                     app:tint="@color/white" />
 
                 <ImageView
                     android:id="@+id/btnMoreMenu"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:layout_marginStart="2dp"
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="More options"
                     android:padding="8dp"
@@ -136,139 +131,171 @@
         </RelativeLayout>
     </LinearLayout>
 
-    <!-- Bottom Action Bar Overlay (Google Photos 4-item Bar) -->
+    <!-- Bottom Controls Area (Holding Counter, Filmstrip, and 4-Action Bar) -->
     <LinearLayout
-        android:id="@+id/bottomBar"
+        android:id="@+id/bottomChromeContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:minHeight="64dp"
-        android:background="#B3000000"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="8dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="8dp"
-        android:paddingBottom="10dp"
+        android:orientation="vertical"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- Share -->
-        <LinearLayout
-            android:id="@+id/btnShare"
-            android:layout_width="0dp"
+        <!-- Position Counter Text (e.g. "3 / 24") floating above filmstrip -->
+        <TextView
+            android:id="@+id/tvMediaCounter"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Share photo"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp">
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="8dp"
+            android:text="1 / 1"
+            android:textColor="#CCFFFFFF"
+            android:textSize="13sp"
+            android:textStyle="normal" />
 
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_share"
-                app:tint="@color/white" />
+        <!-- Filmstrip Container (Frosted glass backing) -->
+        <FrameLayout
+            android:id="@+id/filmstripContainer"
+            android:layout_width="match_parent"
+            android:layout_height="76dp"
+            android:background="#20000000">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Share"
-                android:textColor="@color/white"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvFilmstrip"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:orientation="horizontal"
+                android:overScrollMode="never" />
+        </FrameLayout>
 
-        <!-- Edit -->
+        <!-- Bottom Action Bar (Frosted glass with hairline top border) -->
         <LinearLayout
-            android:id="@+id/btnEdit"
-            android:layout_width="0dp"
+            android:id="@+id/bottomBar"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Edit photo"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp">
+            android:minHeight="64dp"
+            android:background="@drawable/bg_glass_chrome_bottom"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="8dp">
 
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_sliders"
-                app:tint="@color/white" />
-
-            <TextView
-                android:layout_width="wrap_content"
+            <!-- Share -->
+            <LinearLayout
+                android:id="@+id/btnShare"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Edit"
-                android:textColor="@color/white"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+                android:layout_weight="1"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Share"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
 
-        <!-- Add to -->
-        <LinearLayout
-            android:id="@+id/btnAddToAlbum"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Add to album"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp">
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_share"
+                    app:tint="@color/white" />
 
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_add_to"
-                app:tint="@color/white" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Share"
+                    android:textColor="@color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
+            <!-- Edit -->
+            <LinearLayout
+                android:id="@+id/btnEdit"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Add to"
-                android:textColor="@color/white"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+                android:layout_weight="1"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Edit"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
 
-        <!-- Bin -->
-        <LinearLayout
-            android:id="@+id/btnBin"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Move to bin"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp">
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_edit"
+                    app:tint="@color/white" />
 
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_bin"
-                app:tint="@color/white" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Edit"
+                    android:textColor="@color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
+            <!-- Add to album -->
+            <LinearLayout
+                android:id="@+id/btnAddToAlbum"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Bin"
-                android:textColor="@color/white"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Add to album"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_add_to"
+                    app:tint="@color/white" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Add to album"
+                    android:textColor="@color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- Delete -->
+            <LinearLayout
+                android:id="@+id/btnBin"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Delete"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_bin"
+                    app:tint="@color/white" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Delete"
+                    android:textColor="@color/white"
+                    android:textSize="11sp" />
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 

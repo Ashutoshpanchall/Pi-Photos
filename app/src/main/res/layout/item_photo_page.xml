@@ -5,11 +5,13 @@
     android:layout_height="match_parent"
     android:background="@color/black">
 
+    <!-- Square-edged image view, uncropped, aspect ratio preserved, black letterboxing -->
     <com.example.piphotos.ZoomableImageView
         android:id="@+id/zoomImageView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- Video PlayerView: fit mode, square edges, no rounded corners -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="match_parent"
@@ -18,7 +20,7 @@
         app:use_controller="false"
         app:resize_mode="fit" />
 
-    <!-- Video Overlay Elements: Only visible when item is a video -->
+    <!-- Video Controls Overlay: Visible when item is a video -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/videoOverlayContainer"
         android:layout_width="match_parent"
@@ -59,42 +61,87 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- Center Circular Play / Pause Button -->
-        <FrameLayout
-            android:id="@+id/btnCenterPlayPause"
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:background="@drawable/bg_video_circle_play"
-            android:clickable="true"
-            android:focusable="true"
+        <!-- Center Controls Row: Rewind 10s, Center Play/Pause, Forward 10s -->
+        <LinearLayout
+            android:id="@+id/layoutCenterControls"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent">
 
-            <ImageView
-                android:id="@+id/ivCenterPlayPause"
-                android:layout_width="38dp"
-                android:layout_height="38dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_play_arrow"
-                app:tint="@color/white" />
-        </FrameLayout>
+            <!-- Rewind 10 Seconds -->
+            <FrameLayout
+                android:id="@+id/btnRewind10"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:layout_marginEnd="20dp"
+                android:background="@drawable/bg_video_circle_play"
+                android:clickable="true"
+                android:focusable="true">
 
-        <!-- Bottom Scrubber Overlay (Floats above bottom bar, margin bottom ~84dp) -->
+                <ImageView
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_replay_10"
+                    app:tint="@color/white" />
+            </FrameLayout>
+
+            <!-- Center Circular Play / Pause Button -->
+            <FrameLayout
+                android:id="@+id/btnCenterPlayPause"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
+                android:background="@drawable/bg_video_circle_play"
+                android:clickable="true"
+                android:focusable="true">
+
+                <ImageView
+                    android:id="@+id/ivCenterPlayPause"
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_play_arrow"
+                    app:tint="@color/white" />
+            </FrameLayout>
+
+            <!-- Forward 10 Seconds -->
+            <FrameLayout
+                android:id="@+id/btnForward10"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:layout_marginStart="20dp"
+                android:background="@drawable/bg_video_circle_play"
+                android:clickable="true"
+                android:focusable="true">
+
+                <ImageView
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_forward_10"
+                    app:tint="@color/white" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <!-- Video Bottom Scrubber Bar (Apple glass style, floats above filmstrip) -->
         <LinearLayout
             android:id="@+id/videoBottomControls"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
             android:layout_marginEnd="16dp"
-            android:layout_marginBottom="84dp"
+            android:layout_marginBottom="160dp"
             android:background="@drawable/bg_video_duration"
             android:orientation="vertical"
             android:paddingStart="14dp"
-            android:paddingTop="10dp"
+            android:paddingTop="8dp"
             android:paddingEnd="14dp"
-            android:paddingBottom="10dp"
+            android:paddingBottom="8dp"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent">
@@ -105,41 +152,72 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:max="100"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
                 android:progress="0"
                 android:progressTint="@color/primary_blue"
-                android:thumbTint="@color/primary_blue" />
+                android:thumbTint="@color/white" />
 
+            <!-- Sub-bar with Time, Speed, and Mute -->
             <RelativeLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp">
+                android:layout_marginTop="2dp">
 
                 <TextView
                     android:id="@+id/tvCurrentTime"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_alignParentStart="true"
+                    android:layout_centerVertical="true"
                     android:text="0:00"
                     android:textColor="@color/white"
                     android:textSize="12sp"
                     android:textStyle="bold" />
 
-                <TextView
-                    android:id="@+id/tvStreamBadge"
+                <!-- Center: Speed Selector and Mute Button -->
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_centerInParent="true"
-                    android:text="Video"
-                    android:textColor="#B3FFFFFF"
-                    android:textSize="11sp" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <!-- Speed selector button: 0.5x, 1x, 1.5x, 2x -->
+                    <TextView
+                        android:id="@+id/btnPlaybackSpeed"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:paddingStart="8dp"
+                        android:paddingTop="2dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="2dp"
+                        android:text="1.0x"
+                        android:textColor="@color/white"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <!-- Mute Toggle Button -->
+                    <ImageView
+                        android:id="@+id/btnMuteToggle"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="12dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:padding="4dp"
+                        android:src="@drawable/ic_volume_up"
+                        app:tint="@color/white" />
+                </LinearLayout>
 
                 <TextView
                     android:id="@+id/tvTotalDuration"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_alignParentEnd="true"
+                    android:layout_centerVertical="true"
                     android:text="0:00"
-                    android:textColor="@color/white"
+                    android:textColor="#B3FFFFFF"
                     android:textSize="12sp"
                     android:textStyle="bold" />
             </RelativeLayout>

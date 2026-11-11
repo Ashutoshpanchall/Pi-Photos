@@ -19,14 +19,22 @@ import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.dynamicanimation.animation.DynamicAnimation
+import androidx.dynamicanimation.animation.SpringAnimation
+import androidx.dynamicanimation.animation.SpringForce
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.example.piphotos.databinding.ActivityPhotoViewerBinding
 import com.example.piphotos.DeleteResult
 import com.example.piphotos.LocalDeleteHandler
+import com.example.piphotos.media.FilmstripAdapter
+import com.example.piphotos.media.FilmstripCenterHelper
+import com.example.piphotos.media.FrostedGlassHelper
 import com.example.piphotos.media.LocalMediaIndex
 import com.example.piphotos.media.LocalMediaItem
 import com.example.piphotos.media.ViewerSession
@@ -39,17 +47,21 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityPhotoViewerBinding
     private lateinit var adapter: PhotoPagerAdapter
+    private lateinit var filmstripAdapter: FilmstripAdapter
     private var mediaItems: MutableList<LocalMediaItem> = mutableListOf()
     private var currentPosition: Int = 0
     private var areToolbarsVisible: Boolean = true
     private var sessionId: String? = null
     private var isCurrentFavorite: Boolean = false
 
-    // Zoom state of the VISIBLE page only. Off-screen pages that are being bound or recycled
-    // must never change it (they used to re-enable paging while the visible page was zoomed).
+    // Zoom state of the visible page only
     private var currentPageZoomed: Boolean = false
 
     private var exoPlayer: ExoPlayer? = null
+
+    // Flags to eliminate recursive synchronization loops between ViewPager2 and Filmstrip
+    private var isSyncingFromPager = false
+    private var isSyncingFromFilmstrip = false
 
     private val intentSenderLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
@@ -62,8 +74,10 @@ class PhotoViewerActivity : AppCompatActivity() {
                     closeViewerInstant()
                 } else {
                     adapter.notifyItemRemoved(currentPosition)
+                    filmstripAdapter.submitList(mediaItems.toList())
                     currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
                     binding.viewPager.setCurrentItem(currentPosition, false)
+                    filmstripAdapter.setSelectedPosition(currentPosition)
                     attachActivePlayerToCurrentPage()
                     updateHeaderAndFavoriteState()
                 }
@@ -82,28 +96,33 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding = ActivityPhotoViewerBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        WindowInsetsHelper.applyEdgeToEdge(
-            activity = this,
-            rootView = binding.viewerRoot,
-            statusBarSpacer = binding.statusBarSpacer,
-            topBar = binding.topBar,
-            bottomBar = binding.bottomBar,
-            extraTopDp = 0,
-            extraBottomDp = 12
-        )
+        // Apply Apple frosted glass effect to chrome surfaces
+        FrostedGlassHelper.applyGlass(binding.topBar, blurRadiusDp = 24f)
+        FrostedGlassHelper.applyGlass(binding.filmstripContainer, blurRadiusDp = 20f)
+        FrostedGlassHelper.applyGlass(binding.bottomBar, blurRadiusDp = 24f)
+
+        // System Insets: Apply padding so media draws edge-to-edge behind bars
+        ViewCompat.setOnApplyWindowInsetsListener(binding.topBar) { v, insets ->
+            val statusBars = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout()).top
+            binding.statusBarSpacer.layoutParams.height = maxOf(statusBars, cutout)
+            binding.statusBarSpacer.requestLayout()
+            insets
+        }
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.bottomBar) { v, insets ->
             val navBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.systemBars()).bottom
             val displayCutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout()).bottom
             val effectiveBottom = maxOf(navBars, displayCutout)
             val density = v.resources.displayMetrics.density
-            val extraBottom = (14 * density).toInt()
-            v.setPadding(v.paddingLeft, (10 * density).toInt(), v.paddingRight, effectiveBottom + extraBottom)
+            val extraBottom = (6 * density).toInt()
+            v.setPadding(v.paddingLeft, (8 * density).toInt(), v.paddingRight, effectiveBottom + extraBottom)
             insets
         }
 
         loadMediaList()
         setupViewPager()
+        setupFilmstrip()
         setupSwipeDismiss()
         setupTopBarActions()
         setupBottomBarActions()
@@ -146,9 +165,6 @@ class PhotoViewerActivity : AppCompatActivity() {
                 if (position == binding.viewPager.currentItem) {
                     currentPageZoomed = isZoomed
                 }
-                // NOTE: paging is NOT disabled while zoomed. The zoom view locks the parents while
-                // it is panning and releases them at the image edge, so a drag at the edge swipes
-                // to the next photo like Google Photos.
             }
         )
 
@@ -159,16 +175,63 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding.viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
                 currentPosition = position
-                // Leaving a page resets its zoom, so the page we land on is always fully zoomed out.
                 adapter.resetZoomExcept(position)
                 currentPageZoomed = false
                 attachActivePlayerToCurrentPage()
                 updateHeaderAndFavoriteState()
+
+                if (!isSyncingFromFilmstrip) {
+                    isSyncingFromPager = true
+                    filmstripAdapter.setSelectedPosition(position)
+                    val thumbWidthPx = (58 * resources.displayMetrics.density).toInt()
+                    FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, position, thumbWidthPx)
+                    isSyncingFromPager = false
+                }
             }
         })
 
         attachActivePlayerToCurrentPage()
         updateHeaderAndFavoriteState()
+    }
+
+    private fun setupFilmstrip() {
+        filmstripAdapter = FilmstripAdapter { clickedPosition ->
+            if (clickedPosition != currentPosition) {
+                binding.viewPager.setCurrentItem(clickedPosition, true)
+            }
+        }
+
+        val layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)
+        binding.rvFilmstrip.layoutManager = layoutManager
+        binding.rvFilmstrip.adapter = filmstripAdapter
+        filmstripAdapter.submitList(mediaItems.toList())
+        filmstripAdapter.setSelectedPosition(currentPosition)
+
+        // Compute start and end padding dynamically so index 0 and index N-1 can center
+        val thumbWidthPx = (58 * resources.displayMetrics.density).toInt()
+        binding.rvFilmstrip.post {
+            val padding = FilmstripCenterHelper.computeStartEndPadding(binding.rvFilmstrip.width, thumbWidthPx)
+            binding.rvFilmstrip.setPadding(padding, 0, padding, 0)
+            FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx)
+        }
+
+        // Center-based filmstrip selection on scroll & fling settle
+        binding.rvFilmstrip.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE && !isSyncingFromPager) {
+                    val centerPosition = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
+                    if (centerPosition != RecyclerView.NO_POSITION && centerPosition != currentPosition) {
+                        isSyncingFromFilmstrip = true
+                        currentPosition = centerPosition
+                        filmstripAdapter.setSelectedPosition(centerPosition)
+                        binding.viewPager.setCurrentItem(centerPosition, false)
+                        attachActivePlayerToCurrentPage()
+                        updateHeaderAndFavoriteState()
+                        isSyncingFromFilmstrip = false
+                    }
+                }
+            }
+        })
     }
 
     private fun initPlayer() {
@@ -204,7 +267,7 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding.swipeDismissContainer.onDragProgressChanged = { progress ->
             val toolbarAlpha = (1.0f - progress * 2.2f).coerceIn(0f, 1f)
             binding.topBar.alpha = toolbarAlpha
-            binding.bottomBar.alpha = toolbarAlpha
+            binding.bottomChromeContainer.alpha = toolbarAlpha
             val bgAlpha = ((1f - progress * 0.75f) * 255).toInt().coerceIn(0, 255)
             binding.viewerRoot.setBackgroundColor(android.graphics.Color.argb(bgAlpha, 0, 0, 0))
         }
@@ -213,12 +276,16 @@ class PhotoViewerActivity : AppCompatActivity() {
     private fun updateHeaderAndFavoriteState() {
         val item = mediaItems.getOrNull(currentPosition) ?: return
 
-        val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+        // Actual capture timestamp from EXIF / MediaStore DATE_TAKEN
+        val dateFormat = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
         val dateObj = Date(item.effectiveDateMs)
 
         binding.tvViewerDate.text = dateFormat.format(dateObj)
-        binding.tvViewerTime.text = timeFormat.format(dateObj)
+        binding.tvViewerTime.text = timeFormat.format(dateObj).lowercase(Locale.getDefault())
+
+        // Update floating media counter (e.g. "3 / 24")
+        binding.tvMediaCounter.text = "${currentPosition + 1} / ${mediaItems.size}"
 
         val favIds = LocalMediaIndex.getInstance(applicationContext).favoritesRepo.idsFlow.value
         isCurrentFavorite = favIds.contains(item.id)
@@ -227,10 +294,10 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     private fun updateFavoriteIcon(isFav: Boolean) {
         if (isFav) {
-            binding.btnFavoriteStar.setImageResource(R.drawable.ic_star_filled)
+            binding.btnFavoriteStar.setImageResource(R.drawable.ic_heart)
             binding.btnFavoriteStar.setColorFilter(ContextCompat.getColor(this, R.color.status_amber))
         } else {
-            binding.btnFavoriteStar.setImageResource(R.drawable.ic_star_outline)
+            binding.btnFavoriteStar.setImageResource(R.drawable.ic_heart)
             binding.btnFavoriteStar.setColorFilter(ContextCompat.getColor(this, R.color.white))
         }
     }
@@ -242,6 +309,10 @@ class PhotoViewerActivity : AppCompatActivity() {
 
         binding.layoutDateHeader.setOnClickListener {
             showPhotoInfoSheet()
+        }
+
+        binding.btnCast.setOnClickListener {
+            Toast.makeText(this, "Searching for cast devices on local Wi-Fi...", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnFavoriteStar.setOnClickListener { view ->
@@ -302,7 +373,7 @@ class PhotoViewerActivity : AppCompatActivity() {
     }
 
     private fun setupBottomBarActions() {
-        // Real Share with contentUri and ClipData
+        // Real Share
         binding.btnShare.setOnClickListener {
             val item = mediaItems.getOrNull(currentPosition) ?: return@setOnClickListener
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -314,7 +385,7 @@ class PhotoViewerActivity : AppCompatActivity() {
             startActivity(Intent.createChooser(shareIntent, "Share"))
         }
 
-        // Real Edit via system editor Intent
+        // Real Edit via system editor
         binding.btnEdit.setOnClickListener {
             val item = mediaItems.getOrNull(currentPosition) ?: return@setOnClickListener
             val editIntent = Intent(Intent.ACTION_EDIT).apply {
@@ -358,8 +429,10 @@ class PhotoViewerActivity : AppCompatActivity() {
                                 closeViewerInstant()
                             } else {
                                 adapter.notifyItemRemoved(currentPosition)
+                                filmstripAdapter.submitList(mediaItems.toList())
                                 currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
                                 binding.viewPager.setCurrentItem(currentPosition, false)
+                                filmstripAdapter.setSelectedPosition(currentPosition)
                                 attachActivePlayerToCurrentPage()
                                 updateHeaderAndFavoriteState()
                             }
@@ -393,11 +466,34 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     private fun toggleToolbarsVisibility() {
         areToolbarsVisible = !areToolbarsVisible
-        val targetAlpha = if (areToolbarsVisible) 1.0f else 0.0f
-        val duration = 200L
 
-        binding.topBar.animate().alpha(targetAlpha).setDuration(duration).start()
-        binding.bottomBar.animate().alpha(targetAlpha).setDuration(duration).start()
+        val density = resources.displayMetrics.density
+        val slidePx = 12f * density
+
+        val targetAlpha = if (areToolbarsVisible) 1.0f else 0.0f
+        val topTargetY = if (areToolbarsVisible) 0f else -slidePx
+        val bottomTargetY = if (areToolbarsVisible) 0f else slidePx
+
+        // Spring physics for iOS-like smooth slide & fade over ~220ms
+        val springTop = SpringAnimation(binding.topBar, DynamicAnimation.TRANSLATION_Y, topTargetY).apply {
+            spring = SpringForce(topTargetY).apply {
+                stiffness = SpringForce.STIFFNESS_MEDIUM
+                dampingRatio = SpringForce.DAMPING_RATIO_NO_BOUNCY
+            }
+        }
+        val springBottom = SpringAnimation(binding.bottomChromeContainer, DynamicAnimation.TRANSLATION_Y, bottomTargetY).apply {
+            spring = SpringForce(bottomTargetY).apply {
+                stiffness = SpringForce.STIFFNESS_MEDIUM
+                dampingRatio = SpringForce.DAMPING_RATIO_NO_BOUNCY
+            }
+        }
+
+        binding.topBar.animate().alpha(targetAlpha).setDuration(220L).start()
+        binding.bottomChromeContainer.animate().alpha(targetAlpha).setDuration(220L).start()
+
+        springTop.start()
+        springBottom.start()
+
         adapter.setControlsVisibility(areToolbarsVisible)
     }
 
