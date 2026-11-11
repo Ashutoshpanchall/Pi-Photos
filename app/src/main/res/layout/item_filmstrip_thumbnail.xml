@@ -4,8 +4,8 @@
     android:id="@+id/filmstripItemRoot"
     android:layout_width="54dp"
     android:layout_height="70dp"
-    android:layout_marginStart="3dp"
-    android:layout_marginEnd="3dp"
+    android:layout_marginStart="4dp"
+    android:layout_marginEnd="4dp"
     android:clipChildren="false"
     android:clipToPadding="false"
     android:clickable="true"
@@ -66,11 +66,11 @@
             android:id="@+id/viewUnselectedScrim"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="#55000000"
+            android:background="#66000000"
             android:visibility="visible" />
     </androidx.cardview.widget.CardView>
 
-    <!-- Active Selection Border (2dp solid white border, 8dp radius) -->
+    <!-- Active Selection Border (2.5dp crisp white border, 8dp radius) -->
     <View
         android:id="@+id/viewActiveBorder"
         android:layout_width="match_parent"

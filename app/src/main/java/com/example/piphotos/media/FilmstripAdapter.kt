@@ -106,14 +106,14 @@ class FilmstripAdapter(
         }
 
         fun updateSelection(isSelected: Boolean, animate: Boolean) {
-            val targetScale = if (isSelected) 1.05f else 1.0f
-            val targetAlpha = if (isSelected) 1.0f else 0.5f
+            val targetScale = if (isSelected) 1.08f else 1.0f
+            val targetAlpha = if (isSelected) 1.0f else 0.55f
 
             viewActiveBorder.visibility = if (isSelected) View.VISIBLE else View.GONE
             viewUnselectedScrim.visibility = if (isSelected) View.GONE else View.VISIBLE
 
             if (animate) {
-                itemView.animate().alpha(targetAlpha).setDuration(180L).start()
+                itemView.animate().alpha(targetAlpha).setDuration(160L).start()
                 getOrCreateSpringX().animateToFinalPosition(targetScale)
                 getOrCreateSpringY().animateToFinalPosition(targetScale)
             } else {
@@ -165,4 +165,3 @@ class FilmstripAdapter(
         }
     }
 }
-

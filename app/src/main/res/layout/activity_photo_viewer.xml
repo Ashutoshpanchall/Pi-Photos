@@ -144,10 +144,10 @@
             android:id="@+id/videoControlsBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="16dp"
-            android:layout_marginBottom="8dp"
-            android:background="@drawable/bg_video_duration"
+            android:layout_marginStart="14dp"
+            android:layout_marginEnd="14dp"
+            android:layout_marginBottom="10dp"
+            android:background="@drawable/bg_video_controls_capsule"
             android:orientation="vertical"
             android:paddingStart="14dp"
             android:paddingTop="8dp"
@@ -232,24 +232,32 @@
             </RelativeLayout>
         </LinearLayout>
 
-        <!-- Position Counter Text (e.g. "3 / 24") floating above filmstrip -->
+        <!-- Position Counter Text (e.g. "3 / 24") in floating frosted capsule -->
         <TextView
             android:id="@+id/tvMediaCounter"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
             android:layout_marginBottom="8dp"
+            android:background="@drawable/bg_counter_capsule"
+            android:paddingStart="12dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="4dp"
             android:text="1 / 1"
-            android:textColor="#CCFFFFFF"
-            android:textSize="13sp"
+            android:textColor="#E6FFFFFF"
+            android:textSize="12sp"
             android:textStyle="normal" />
 
-        <!-- Filmstrip Container (Frosted glass backing) -->
+        <!-- Filmstrip Container (Floating frosted glass capsule) -->
         <FrameLayout
             android:id="@+id/filmstripContainer"
             android:layout_width="match_parent"
             android:layout_height="76dp"
-            android:background="@drawable/bg_filmstrip_container">
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="10dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/bg_filmstrip_capsule">
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rvFilmstrip"
@@ -356,12 +364,12 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Add to album"
+                    android:text="Add to"
                     android:textColor="@color/white"
                     android:textSize="11sp" />
             </LinearLayout>
 
-            <!-- Delete -->
+            <!-- Delete / Bin -->
             <LinearLayout
                 android:id="@+id/btnBin"
                 android:layout_width="0dp"
@@ -385,7 +393,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Delete"
+                    android:text="Bin"
                     android:textColor="@color/white"
                     android:textSize="11sp" />
             </LinearLayout>

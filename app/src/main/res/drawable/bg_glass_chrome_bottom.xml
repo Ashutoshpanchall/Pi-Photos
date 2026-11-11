@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Apple-style dark frosted glass background -->
+    <!-- Apple-style dark frosted glass background (88% black #E0121212) -->
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#D9141414" />
+            <solid android:color="#E0121212" />
         </shape>
     </item>
-    <!-- Crisp hairline top border (15% white alpha) -->
+    <!-- Crisp hairline top border (0.5dp, 16% white alpha) -->
     <item android:top="0dp">
         <shape android:shape="rectangle">
             <stroke
                 android:width="0.5dp"
-                android:color="#26FFFFFF" />
+                android:color="#29FFFFFF" />
             <solid android:color="@android:color/transparent" />
         </shape>
     </item>

@@ -21,7 +21,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.dynamicanimation.animation.DynamicAnimation
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
@@ -95,7 +97,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                     adapter.notifyItemRemoved(currentPosition)
                     currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
                     filmstripAdapter.submitList(mediaItems.toList()) {
-                        val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
+                        val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
                         FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
                     }
                     binding.viewPager.setCurrentItem(currentPosition, false)
@@ -205,18 +207,20 @@ class PhotoViewerActivity : AppCompatActivity() {
 
         binding.viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
-                currentPosition = position
-                adapter.resetZoomExcept(position)
-                currentPageZoomed = false
-                attachActivePlayerToCurrentPage()
-                updateHeaderAndFavoriteState()
+                if (currentPosition != position) {
+                    currentPosition = position
+                    adapter.resetZoomExcept(position)
+                    currentPageZoomed = false
+                    attachActivePlayerToCurrentPage()
+                    updateHeaderAndFavoriteState()
 
-                if (!isSyncingFromFilmstrip) {
-                    isSyncingFromPager = true
-                    filmstripAdapter.setSelectedPosition(position)
-                    val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
-                    FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, position, thumbWidthPx, smooth = true)
-                    isSyncingFromPager = false
+                    if (!isSyncingFromFilmstrip) {
+                        isSyncingFromPager = true
+                        filmstripAdapter.setSelectedPosition(position)
+                        val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
+                        FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, position, thumbWidthPx, smooth = true)
+                        isSyncingFromPager = false
+                    }
                 }
             }
         })
@@ -236,11 +240,11 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding.rvFilmstrip.layoutManager = layoutManager
         binding.rvFilmstrip.adapter = filmstripAdapter
 
-        // Attach snap helper for smooth center snapping
+        // Attach snap helper for smooth center snapping when sliding settles
         val snapHelper = LinearSnapHelper()
         snapHelper.attachToRecyclerView(binding.rvFilmstrip)
 
-        val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
+        val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
         binding.rvFilmstrip.post {
             val padding = FilmstripCenterHelper.computeStartEndPadding(binding.rvFilmstrip.width, thumbWidthPx)
             binding.rvFilmstrip.setPadding(padding, 0, padding, 0)
@@ -250,9 +254,37 @@ class PhotoViewerActivity : AppCompatActivity() {
             filmstripAdapter.setSelectedPosition(currentPosition)
         }
 
-        // Center-based filmstrip selection on scroll & fling settle
+        // Continuous Real-Time Sliding Sync + Subtle Haptic Tick on Thumbnail Boundary
         binding.rvFilmstrip.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                super.onScrolled(recyclerView, dx, dy)
+                if (isSyncingFromPager) return
+
+                val centerPos = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
+                if (centerPos != RecyclerView.NO_POSITION && centerPos != currentPosition) {
+                    isSyncingFromFilmstrip = true
+                    currentPosition = centerPos
+                    filmstripAdapter.setSelectedPosition(centerPos)
+                    // Seamless real-time page swap as user drags
+                    binding.viewPager.setCurrentItem(centerPos, false)
+                    adapter.resetZoomExcept(centerPos)
+                    currentPageZoomed = false
+
+                    // Gentle subtle tick for premium tactile feel
+                    val hapticFlag = HapticFeedbackConstants.CLOCK_TICK
+                    recyclerView.performHapticFeedback(
+                        hapticFlag,
+                        HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+                    )
+
+                    attachActivePlayerToCurrentPage()
+                    updateHeaderAndFavoriteState()
+                    isSyncingFromFilmstrip = false
+                }
+            }
+
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                super.onScrollStateChanged(recyclerView, newState)
                 if (newState == RecyclerView.SCROLL_STATE_IDLE && !isSyncingFromPager) {
                     val centerPosition = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
                     if (centerPosition != RecyclerView.NO_POSITION && centerPosition != currentPosition) {
@@ -260,6 +292,8 @@ class PhotoViewerActivity : AppCompatActivity() {
                         currentPosition = centerPosition
                         filmstripAdapter.setSelectedPosition(centerPosition)
                         binding.viewPager.setCurrentItem(centerPosition, false)
+                        adapter.resetZoomExcept(centerPosition)
+                        currentPageZoomed = false
                         attachActivePlayerToCurrentPage()
                         updateHeaderAndFavoriteState()
                         isSyncingFromFilmstrip = false
@@ -523,7 +557,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                                 adapter.notifyItemRemoved(currentPosition)
                                 currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
                                 filmstripAdapter.submitList(mediaItems.toList()) {
-                                    val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
+                                    val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
                                     FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
                                 }
                                 binding.viewPager.setCurrentItem(currentPosition, false)
@@ -545,7 +579,7 @@ class PhotoViewerActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
-    }
+        }
 
     private fun setupBackNavigation() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -561,6 +595,15 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     private fun toggleToolbarsVisibility() {
         areToolbarsVisible = !areToolbarsVisible
+
+        // Toggle Status Bar & System Bars for Immersive Full Screen
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (areToolbarsVisible) {
+            insetsController.show(WindowInsetsCompat.Type.systemBars())
+        } else {
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        }
 
         val density = resources.displayMetrics.density
         val slidePx = 12f * density
