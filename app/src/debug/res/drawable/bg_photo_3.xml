@@ -1,0 +1,80 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Sunny Blue Sky -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="150"
+                android:type="linear">
+                <item android:color="#FF4B7CB2" android:offset="0.0"/>
+                <item android:color="#FF82A9D1" android:offset="0.6"/>
+                <item android:color="#FFD4E4F2" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Background Forest Trees -->
+    <path
+        android:fillColor="#FF23432A"
+        android:pathData="M0,130 C20,115 40,125 50,110 C70,120 90,105 110,115 C130,108 150,118 170,110 C185,120 200,112 200,200 L0,200 Z"/>
+
+    <!-- Temple Architecture: Plinth / Stone Foundation -->
+    <path
+        android:fillColor="#FF7A6044"
+        android:pathData="M25,185 L175,185 L170,165 L30,165 Z"/>
+    <path
+        android:fillColor="#FF967A5A"
+        android:pathData="M35,165 L165,165 L160,145 L40,145 Z"/>
+
+    <!-- Tier 1 Base Structure & Columns -->
+    <path
+        android:fillColor="#FFA88C6B"
+        android:pathData="M48,145 L152,145 L152,115 L48,115 Z"/>
+    <path
+        android:fillColor="#FF5C4630"
+        android:pathData="M54,120 L62,120 L62,145 L54,145 Z M78,120 L86,120 L86,145 L78,145 Z M114,120 L122,120 L122,145 L114,145 Z M138,120 L146,120 L146,145 L138,145 Z M94,123 L106,123 L106,145 L94,145 Z"/>
+
+    <!-- Tier 1 Overhanging Eaves / Cornice -->
+    <path
+        android:fillColor="#FF6B533E"
+        android:pathData="M38,115 L162,115 L155,108 L45,108 Z"/>
+
+    <!-- Tier 2 Upper Sanctum -->
+    <path
+        android:fillColor="#FFB39775"
+        android:pathData="M60,108 L140,108 L140,82 L60,82 Z"/>
+    <path
+        android:fillColor="#FF634D37"
+        android:pathData="M68,88 L74,88 L74,108 L68,108 Z M96,88 L104,88 L104,108 L96,108 Z M126,88 L132,88 L132,108 L126,108 Z"/>
+
+    <!-- Tier 2 Cornice -->
+    <path
+        android:fillColor="#FF6B533E"
+        android:pathData="M52,82 L148,82 L142,76 L58,76 Z"/>
+
+    <!-- Shikhara / Pagoda Main Spire -->
+    <path
+        android:fillColor="#FFA68A69"
+        android:pathData="M70,76 L130,76 L118,40 L82,40 Z"/>
+    <path
+        android:fillColor="#FF8F7254"
+        android:pathData="M82,40 L118,40 L108,24 L92,24 Z"/>
+    <!-- Kalasha / Golden Finial -->
+    <path
+        android:fillColor="#FFE0AA3E"
+        android:pathData="M95,24 L105,24 L102,12 L98,12 Z M100,12m-3,0a3,3 0 1,0 6,0a3,3 0 1,0 -6,0"/>
+
+    <!-- Foreground Stone Courtyard -->
+    <path
+        android:fillColor="#FF5C4936"
+        android:pathData="M0,185 L200,185 L200,200 L0,200 Z"/>
+</vector>

@@ -1,0 +1,71 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Forest Deep Background -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="200"
+                android:type="linear">
+                <item android:color="#FF16301A" android:offset="0.0"/>
+                <item android:color="#FF1E4524" android:offset="0.5"/>
+                <item android:color="#FF0D2010" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Sunburst Radiance Center at upper-left -->
+    <path
+        android:fillColor="#55FFF4B8"
+        android:pathData="M60,45m-40,0a40,40 0 1,0 80,0a40,40 0 1,0 -80,0"/>
+    <path
+        android:fillColor="#DDFFFBE6"
+        android:pathData="M60,45m-15,0a15,15 0 1,0 30,0a15,15 0 1,0 -30,0"/>
+
+    <!-- Dramatic Light Rays (God Rays) piercing through canopy -->
+    <path
+        android:fillColor="#35FFE885"
+        android:pathData="M60,45 L-10,200 L30,200 Z"/>
+    <path
+        android:fillColor="#45FFF4A3"
+        android:pathData="M60,45 L40,200 L90,200 Z"/>
+    <path
+        android:fillColor="#38FFE885"
+        android:pathData="M60,45 L110,200 L160,200 Z"/>
+    <path
+        android:fillColor="#25FFE885"
+        android:pathData="M60,45 L175,180 L210,200 Z"/>
+
+    <!-- Tall Silhouette Pine / Forest Trunks -->
+    <path
+        android:fillColor="#EE111A12"
+        android:pathData="M18,0 L26,0 L29,200 L15,200 Z"/>
+    <path
+        android:fillColor="#DD142115"
+        android:pathData="M80,0 L90,0 L94,200 L76,200 Z"/>
+    <path
+        android:fillColor="#EE0E170F"
+        android:pathData="M135,0 L146,0 L150,200 L131,200 Z"/>
+    <path
+        android:fillColor="#FF101B11"
+        android:pathData="M178,0 L188,0 L192,200 L174,200 Z"/>
+
+    <!-- Canopy Leaf Clusters -->
+    <path
+        android:fillColor="#CC183B1C"
+        android:pathData="M0,0 C30,35 60,10 90,30 C120,5 150,30 200,0 L200,45 C170,60 140,40 110,55 C80,40 40,60 0,45 Z"/>
+
+    <!-- Fern / Moss Forest Floor -->
+    <path
+        android:fillColor="#FF0F1D11"
+        android:pathData="M0,175 C40,165 80,185 120,170 C160,180 185,165 200,175 L200,200 L0,200 Z"/>
+</vector>
+

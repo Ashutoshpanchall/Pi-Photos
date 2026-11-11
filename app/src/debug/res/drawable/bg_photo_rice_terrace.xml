@@ -1,0 +1,62 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Misty Mountain Sky -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="90"
+                android:type="linear">
+                <item android:color="#FF7D919D" android:offset="0.0"/>
+                <item android:color="#FFB0C2CE" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Distant Forest Mountain Range -->
+    <path
+        android:fillColor="#FF385042"
+        android:pathData="M0,80 C30,65 70,75 110,60 C150,70 180,62 200,72 L200,200 L0,200 Z"/>
+
+    <!-- Stepped Curving Rice Terraces -->
+    <!-- Terrace 1 -->
+    <path
+        android:fillColor="#FF467540"
+        android:pathData="M0,95 Q90,75 200,105 L200,120 Q90,90 0,110 Z"/>
+    <path
+        android:fillColor="#FF2F532B"
+        android:pathData="M0,110 Q90,90 200,120 L200,126 Q90,96 0,116 Z"/>
+
+    <!-- Terrace 2 -->
+    <path
+        android:fillColor="#FF558E4E"
+        android:pathData="M0,116 Q100,95 200,126 L200,142 Q100,110 0,132 Z"/>
+    <path
+        android:fillColor="#FF335A2F"
+        android:pathData="M0,132 Q100,110 200,142 L200,148 Q100,116 0,138 Z"/>
+
+    <!-- Terrace 3 -->
+    <path
+        android:fillColor="#FF68A65D"
+        android:pathData="M0,138 Q110,115 200,148 L200,165 Q110,130 0,154 Z"/>
+    <path
+        android:fillColor="#FF3C6636"
+        android:pathData="M0,154 Q110,130 200,165 L200,172 Q110,138 0,162 Z"/>
+
+    <!-- Terrace 4 (Foreground) -->
+    <path
+        android:fillColor="#FF77B86B"
+        android:pathData="M0,162 Q120,138 200,172 L200,192 Q120,155 0,182 Z"/>
+    <path
+        android:fillColor="#FF41703A"
+        android:pathData="M0,182 Q120,155 200,192 L200,200 L0,200 Z"/>
+</vector>
+

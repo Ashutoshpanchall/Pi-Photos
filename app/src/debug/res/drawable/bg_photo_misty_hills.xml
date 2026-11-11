@@ -1,0 +1,54 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Soft Dawn Pastel Sky -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="140"
+                android:type="linear">
+                <item android:color="#FF75839C" android:offset="0.0"/>
+                <item android:color="#FFB3A1A6" android:offset="0.5"/>
+                <item android:color="#FFE8C5A8" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Faint Distant Mountain Silhouette in Fog -->
+    <path
+        android:fillColor="#5558667A"
+        android:pathData="M0,110 C40,95 80,105 120,90 C160,100 180,95 200,105 L200,200 L0,200 Z"/>
+
+    <!-- Mist Layer 1 -->
+    <path
+        android:fillColor="#44E8D7CA"
+        android:pathData="M0,118 Q100,110 200,122 L200,135 Q100,128 0,132 Z"/>
+
+    <!-- Midground Rolling Ridge -->
+    <path
+        android:fillColor="#883A495C"
+        android:pathData="M0,132 C30,125 70,138 110,122 C150,135 180,126 200,136 L200,200 L0,200 Z"/>
+
+    <!-- Mist Layer 2 -->
+    <path
+        android:fillColor="#55D4C2B8"
+        android:pathData="M0,140 Q100,132 200,145 L200,155 Q100,148 0,152 Z"/>
+
+    <!-- Foreground Mountain Slope with Pines -->
+    <path
+        android:fillColor="#FF23313F"
+        android:pathData="M0,155 C50,145 90,165 140,150 C175,160 190,155 200,162 L200,200 L0,200 Z"/>
+
+    <path
+        android:fillColor="#FF18222C"
+        android:pathData="M0,172 C60,168 110,182 170,168 L200,174 L200,200 L0,200 Z"/>
+</vector>
+

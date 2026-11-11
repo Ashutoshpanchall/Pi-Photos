@@ -1,0 +1,51 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Sky Gradient -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="140"
+                android:type="linear">
+                <item android:color="#FF5D4E72" android:offset="0.0"/>
+                <item android:color="#FFB36873" android:offset="0.45"/>
+                <item android:color="#FFE8A278" android:offset="0.85"/>
+                <item android:color="#FFFED093" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Rising Sun Glow -->
+    <path
+        android:fillColor="#44FFE8B6"
+        android:pathData="M100,105m-45,0a45,45 0 1,0 90,0a45,45 0 1,0 -90,0"/>
+
+    <!-- Distant Mountains -->
+    <path
+        android:fillColor="#883B3654"
+        android:pathData="M0,130 L35,105 L70,122 L115,95 L160,118 L200,100 L200,200 L0,200 Z"/>
+
+    <!-- Midground Ridge -->
+    <path
+        android:fillColor="#CC25243E"
+        android:pathData="M0,140 L45,120 L80,135 L130,112 L175,132 L200,125 L200,200 L0,200 Z"/>
+
+    <!-- Foreground Mountain & Forest Ridge -->
+    <path
+        android:fillColor="#FF131626"
+        android:pathData="M0,155 L30,145 L60,152 L95,138 L140,158 L185,142 L200,148 L200,200 L0,200 Z"/>
+
+    <!-- Pine Silhouettes -->
+    <path
+        android:fillColor="#FF0D101C"
+        android:pathData="M15,155 L18,142 L21,155 Z M45,152 L48,136 L51,152 Z M80,148 L83,132 L86,148 Z M160,150 L163,135 L166,150 Z M180,146 L183,130 L186,146 Z"/>
+</vector>
+

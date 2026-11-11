@@ -1,0 +1,48 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Cerulean Blue Sky Gradient -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="200"
+                android:type="linear">
+                <item android:color="#FF3879BC" android:offset="0.0"/>
+                <item android:color="#FF5D97D4" android:offset="0.5"/>
+                <item android:color="#FF8BBCE6" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Cloud Bank 1 (Soft background cloud) -->
+    <path
+        android:fillColor="#44FFFFFF"
+        android:pathData="M20,110 C20,95 35,85 50,85 C55,70 75,65 90,75 C100,68 120,70 125,82 C140,80 155,92 155,108 C155,115 145,120 135,122 L35,122 C25,120 20,118 20,110 Z"/>
+
+    <!-- Cloud Bank 2 (Main fluffy cumulus cloud) -->
+    <path
+        android:fillColor="#DDFFFFFF"
+        android:pathData="M55,145 C55,128 72,118 88,118 C93,100 115,95 132,106 C143,98 165,100 171,114 C187,112 203,126 203,144 C203,158 191,162 180,164 L75,164 C62,162 55,156 55,145 Z"/>
+
+    <!-- Cloud Shadow Shading underneath -->
+    <path
+        android:fillColor="#33789CBD"
+        android:pathData="M70,154 C90,158 150,158 185,152 C180,164 75,164 70,154 Z"/>
+
+    <!-- Small upper drifting wisps -->
+    <path
+        android:fillColor="#77FFFFFF"
+        android:pathData="M110,48 C110,40 120,35 130,35 C135,28 148,25 158,32 C168,36 175,45 170,52 L120,52 C113,50 110,49 110,48 Z"/>
+    <path
+        android:fillColor="#66FFFFFF"
+        android:pathData="M15,62 C15,55 24,50 32,50 C38,45 48,46 52,52 C58,55 60,62 55,67 L22,67 C16,65 15,64 15,62 Z"/>
+</vector>
+

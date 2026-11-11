@@ -1,0 +1,97 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Soft Warm Outdoor Background -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="135"
+                android:startX="0"
+                android:startY="0"
+                android:endX="200"
+                android:endY="200"
+                android:type="linear">
+                <item android:color="#FF7A8B78" android:offset="0.0"/>
+                <item android:color="#FFA2B19E" android:offset="0.5"/>
+                <item android:color="#FF637361" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- German Shepherd Body / Shoulders -->
+    <path
+        android:fillColor="#FF2B2521"
+        android:pathData="M35,200 C35,160 55,145 75,140 L125,140 C145,145 165,160 165,200 Z"/>
+
+    <!-- Tan Fur Chest -->
+    <path
+        android:fillColor="#FFC4884D"
+        android:pathData="M70,150 C70,170 85,190 100,195 C115,190 130,170 130,150 Z"/>
+
+    <!-- Neck & Head Base -->
+    <path
+        android:fillColor="#FFB87B42"
+        android:pathData="M65,140 L70,80 L130,80 L135,140 Z"/>
+
+    <!-- Large Pointed Ears -->
+    <!-- Left Ear -->
+    <path
+        android:fillColor="#FF241E1A"
+        android:pathData="M62,85 L52,18 L88,68 Z"/>
+    <path
+        android:fillColor="#FFCC8F58"
+        android:pathData="M65,75 L60,32 L82,66 Z"/>
+
+    <!-- Right Ear -->
+    <path
+        android:fillColor="#FF241E1A"
+        android:pathData="M138,85 L148,18 L112,68 Z"/>
+    <path
+        android:fillColor="#FFCC8F58"
+        android:pathData="M135,75 L140,32 L118,66 Z"/>
+
+    <!-- Black Mask / Forehead -->
+    <path
+        android:fillColor="#FF201A17"
+        android:pathData="M72,75 C72,55 128,55 128,75 C128,95 120,115 100,118 C80,115 72,95 72,75 Z"/>
+
+    <!-- Warm Tan Cheek Fur -->
+    <path
+        android:fillColor="#FFC88C50"
+        android:pathData="M62,95 C62,115 76,130 88,132 L78,100 Z M138,95 C138,115 124,130 112,132 L122,100 Z"/>
+
+    <!-- Dark Expressive Eyes with Highlights -->
+    <path
+        android:fillColor="#FF4A2A08"
+        android:pathData="M82,82m-6,0a6,6 0 1,0 12,0a6,6 0 1,0 -12,0"/>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M84,80m-1.8,0a1.8,1.8 0 1,0 3.6,0a1.8,1.8 0 1,0 -3.6,0"/>
+
+    <path
+        android:fillColor="#FF4A2A08"
+        android:pathData="M118,82m-6,0a6,6 0 1,0 12,0a6,6 0 1,0 -12,0"/>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M120,80m-1.8,0a1.8,1.8 0 1,0 3.6,0a1.8,1.8 0 1,0 -3.6,0"/>
+
+    <!-- Black Snout & Nose -->
+    <path
+        android:fillColor="#FF181412"
+        android:pathData="M88,96 L112,96 L106,122 L94,122 Z"/>
+    <path
+        android:fillColor="#FF080706"
+        android:pathData="M92,108 C92,104 108,104 108,108 C108,114 100,116 100,116 C100,116 92,114 92,108 Z"/>
+
+    <!-- Happy Open Mouth & Pink Tongue -->
+    <path
+        android:fillColor="#FF1F1113"
+        android:pathData="M93,122 C93,130 107,130 107,122 Z"/>
+    <path
+        android:fillColor="#FFE66B7D"
+        android:pathData="M95,124 C95,142 105,142 105,124 Z"/>
+</vector>

@@ -1,0 +1,74 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Coastal Sunset Sky Gradient -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="130"
+                android:type="linear">
+                <item android:color="#FF383B68" android:offset="0.0"/>
+                <item android:color="#FF8A4B69" android:offset="0.45"/>
+                <item android:color="#FFE8704D" android:offset="0.8"/>
+                <item android:color="#FFFFA959" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Golden Setting Sun at Horizon -->
+    <path
+        android:fillColor="#FFFFDD94"
+        android:pathData="M115,115m-18,0a18,18 0 1,0 36,0a18,18 0 1,0 -36,0"/>
+
+    <!-- Distant Sea Horizon & Ocean Water -->
+    <path android:pathData="M0,115h200v85h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="115"
+                android:endX="100"
+                android:endY="200"
+                android:type="linear">
+                <item android:color="#FF633E43" android:offset="0.0"/>
+                <item android:color="#FF322D3E" android:offset="0.4"/>
+                <item android:color="#FF1A202E" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Sun Reflection on Water Surface -->
+    <path
+        android:fillColor="#88FFC87A"
+        android:pathData="M100,118 L130,118 L125,123 L105,123 Z M95,126 L135,126 L128,131 L102,131 Z M88,135 L142,135 L132,141 L98,141 Z M80,146 L150,146 L138,153 L92,153 Z"/>
+
+    <!-- Foam / Gentle Wave Crests -->
+    <path
+        android:strokeColor="#77FFF0DD"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M10,135 Q50,132 90,136 T170,133 T200,135"/>
+    <path
+        android:strokeColor="#AAFFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M0,165 Q40,160 80,166 T160,162 T200,167"/>
+
+    <!-- Wet Sand Beach Shoreline -->
+    <path
+        android:fillColor="#FF231E24"
+        android:pathData="M0,185 Q60,178 120,184 T200,180 L200,200 L0,200 Z"/>
+    <path
+        android:strokeColor="#EEFFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M0,185 Q60,178 120,184 T200,180"/>
+</vector>
+

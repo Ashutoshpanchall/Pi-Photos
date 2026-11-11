@@ -1,0 +1,54 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Glowing Dusk Sunset Sky -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="270"
+                android:startX="100"
+                android:startY="0"
+                android:endX="100"
+                android:endY="140"
+                android:type="linear">
+                <item android:color="#FF43335A" android:offset="0.0"/>
+                <item android:color="#FF9E4A5C" android:offset="0.5"/>
+                <item android:color="#FFE87A4A" android:offset="0.85"/>
+                <item android:color="#FFFFA866" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Low Sunset Sun over Skyline -->
+    <path
+        android:fillColor="#FFFFDE96"
+        android:pathData="M85,128m-16,0a16,16 0 1,0 32,0a16,16 0 1,0 -32,0"/>
+
+    <!-- Distant City Skyscrapers Silhouette -->
+    <path
+        android:fillColor="#7731223A"
+        android:pathData="M10,135 L10,115 L22,115 L22,135 L40,135 L40,105 L52,105 L52,135 L80,135 L80,95 L92,95 L92,135 L125,135 L125,102 L138,102 L138,135 L160,135 L160,110 L172,110 L172,135 Z"/>
+
+    <!-- Foreground Skyline Blocks & Towers -->
+    <path
+        android:fillColor="#FF181324"
+        android:pathData="M0,140 L0,122 L16,122 L16,110 L28,110 L28,140 L34,140 L34,92 L46,92 L46,140 L60,140 L60,118 L72,118 L72,140 L98,140 L98,82 L104,82 L104,74 L107,74 L107,82 L116,82 L116,140 L130,140 L130,105 L144,105 L144,140 L158,140 L158,114 L170,114 L170,140 L182,140 L182,98 L194,98 L194,140 L200,140 L200,200 L0,200 Z"/>
+
+    <!-- Illuminated Tiny Windows in Towers -->
+    <path
+        android:fillColor="#88FFDA85"
+        android:pathData="M38,98h2v3h-2z M42,98h2v3h-2z M38,105h2v3h-2z M42,105h2v3h-2z M102,90h3v3h-3z M108,90h3v3h-3z M102,98h3v3h-3z M108,98h3v3h-3z M102,106h3v3h-3z M108,106h3v3h-3z M134,112h2v2h-2z M138,112h2v2h-2z M186,106h2v3h-2z M190,106h2v3h-2z"/>
+
+    <!-- River / Bay Water with Golden Reflection -->
+    <path
+        android:fillColor="#FF120E1C"
+        android:pathData="M0,165h200v35h-200z"/>
+    <path
+        android:fillColor="#55FFA652"
+        android:pathData="M70,168 L100,168 L95,172 L75,172 Z M65,175 L105,175 L98,180 L72,180 Z M60,183 L110,183 L102,189 L68,189 Z M50,192 L120,192 L110,198 L60,198 Z"/>
+</vector>
+

@@ -1,0 +1,80 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+
+    <!-- Lush Leaf Gradient Background -->
+    <path android:pathData="M0,0h200v200h-200z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:angle="135"
+                android:startX="0"
+                android:startY="0"
+                android:endX="200"
+                android:endY="200"
+                android:type="linear">
+                <item android:color="#FF1A4D2E" android:offset="0.0"/>
+                <item android:color="#FF2E6B3E" android:offset="0.4"/>
+                <item android:color="#FF183B22" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Main Leaf Curvature Body -->
+    <path
+        android:fillColor="#FF235832"
+        android:pathData="M30,190 C40,110 100,50 180,30 C190,90 150,170 30,190 Z"/>
+
+    <!-- Central Vein -->
+    <path
+        android:strokeColor="#55A7E29C"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M35,185 Q105,115 175,35"/>
+
+    <!-- Secondary Leaf Veins -->
+    <path
+        android:strokeColor="#33A7E29C"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M60,160 Q85,145 95,155 M85,135 Q115,115 130,128 M115,105 Q140,85 158,98 M140,75 Q160,60 170,70"/>
+
+    <!-- Dewdrops with 3D Specular Highlight -->
+    <!-- Large Drop 1 -->
+    <path
+        android:fillColor="#55FFFFFF"
+        android:strokeColor="#66FFFFFF"
+        android:strokeWidth="1.5"
+        android:pathData="M95,85m-14,0a14,14 0 1,0 28,0a14,14 0 1,0 -28,0"/>
+    <path
+        android:fillColor="#DDFFFFFF"
+        android:pathData="M90,79m-4,0a4,4 0 1,0 8,0a4,4 0 1,0 -8,0"/>
+
+    <!-- Drop 2 -->
+    <path
+        android:fillColor="#44FFFFFF"
+        android:strokeColor="#55FFFFFF"
+        android:strokeWidth="1.2"
+        android:pathData="M135,120m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0"/>
+    <path
+        android:fillColor="#CCFFFFFF"
+        android:pathData="M132,116m-2.5,0a2.5,2.5 0 1,0 5,0a2.5,2.5 0 1,0 -5,0"/>
+
+    <!-- Small Drop 3 -->
+    <path
+        android:fillColor="#66FFFFFF"
+        android:pathData="M70,125m-6,0a6,6 0 1,0 12,0a6,6 0 1,0 -12,0"/>
+    <path
+        android:fillColor="#EEFFFFFF"
+        android:pathData="M68,122m-1.5,0a1.5,1.5 0 1,0 3,0a1.5,1.5 0 1,0 -3,0"/>
+
+    <!-- Small Drop 4 -->
+    <path
+        android:fillColor="#55FFFFFF"
+        android:pathData="M150,65m-5,0a5,5 0 1,0 10,0a5,5 0 1,0 -10,0"/>
+    <path
+        android:fillColor="#EEFFFFFF"
+        android:pathData="M148,63m-1.5,0a1.5,1.5 0 1,0 3,0a1.5,1.5 0 1,0 -3,0"/>
+</vector>

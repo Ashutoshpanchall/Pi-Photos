@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    
+    <!-- Light Theme Design Tokens (Global Design System) -->
+    <color name="bg_page">#FAFAFA</color>
+    <color name="surface_card">#FFFFFF</color>
+    <color name="surface_elevated">#F4F6F9</color>
+    <color name="surface_card_subtle">#F1F3F7</color>
+    <color name="surface_selected">#E4EDFF</color>
+    
+    <color name="primary_blue">#4779D0</color>
+    <color name="accent">#4779D0</color>
+    <color name="primary_blue_dark">#3362B3</color>
+    <color name="primary_blue_light">#EBF2FD</color>
+    <color name="primary_blue_tint">#D6E4FA</color>
+    
+    <!-- Text Tokens -->
+    <color name="text_primary">#171923</color>
+    <color name="text_secondary">#77849A</color>
+    <color name="text_tertiary">#9EAABF</color>
+    <color name="text_blue">#4779D0</color>
+    
+    <!-- Status & Semantic Tokens -->
+    <color name="status_green">#27875A</color>
+    <color name="status_green_bg">#E8F7F0</color>
+    <color name="status_amber">#D97706</color>
+    <color name="status_red">#DC4545</color>
+    <color name="error_card_bg">#FDF2F2</color>
+    <color name="error_border">#FBD5D5</color>
+    <color name="error_text">#DC4545</color>
+    
+    <!-- Dividers & Borders -->
+    <color name="divider_subtle">#E9ECF1</color>
+    <color name="border_card">#E2E7EE</color>
+    <color name="pill_bg">#EEF2F6</color>
+    <color name="pill_bg_active">#FFFFFF</color>
+    <color name="progress_track">#E9ECF1</color>
+    
+    <!-- Avatars -->
+    <color name="avatar_user1_bg">#E4EDFF</color>
+    <color name="avatar_user1_text">#2B5EA8</color>
+    <color name="avatar_user2_bg">#E9ECF1</color>
+    <color name="avatar_user2_text">#475569</color>
+    <color name="avatar_user3_bg">#E9ECF1</color>
+    <color name="avatar_user3_text">#475569</color>
+    
+    <!-- Photo Tile Fallbacks -->
+    <color name="photo_tile_1">#7E99B7</color>
+    <color name="photo_tile_2">#A39171</color>
+    <color name="photo_tile_3">#4A6B82</color>
+    <color name="photo_tile_4">#8C6D62</color>
+    <color name="photo_tile_5">#4E8752</color>
+    <color name="photo_tile_6">#D97706</color>
+    
+    <!-- Navigation High Contrast (Light) -->
+    <color name="nav_selected">#3362B3</color>
+    <color name="nav_unselected">#77849A</color>
+    <color name="nav_indicator">#E4EDFF</color>
+</resources>

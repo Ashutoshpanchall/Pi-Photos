@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    
+    <!-- AMOLED Dark Theme Design Tokens (Global Design System) -->
+    <color name="bg_page">#000000</color>
+    <color name="surface_card">#0A0A0A</color>
+    <color name="surface_elevated">#111111</color>
+    <color name="surface_card_subtle">#171717</color>
+    <color name="surface_selected">#182338</color>
+    
+    <color name="primary_blue">#6B9CFF</color>
+    <color name="accent">#6B9CFF</color>
+    <color name="primary_blue_dark">#4779D0</color>
+    <color name="primary_blue_light">#171717</color>
+    <color name="primary_blue_tint">#1B273F</color>
+    
+    <!-- Text Tokens -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#A1A1AA</color>
+    <color name="text_tertiary">#71717A</color>
+    <color name="text_blue">#6B9CFF</color>
+    
+    <!-- Status & Semantic Tokens -->
+    <color name="status_green">#55C58A</color>
+    <color name="status_green_bg">#092618</color>
+    <color name="status_amber">#FBBF24</color>
+    <color name="status_red">#FF5A5A</color>
+    <color name="error_card_bg">#200D0D</color>
+    <color name="error_border">#3D1919</color>
+    <color name="error_text">#FF5A5A</color>
+    
+    <!-- Dividers & Borders -->
+    <color name="divider_subtle">#222222</color>
+    <color name="border_card">#1C1C1E</color>
+    <color name="pill_bg">#171717</color>
+    <color name="pill_bg_active">#111111</color>
+    <color name="progress_track">#222222</color>
+    
+    <!-- Avatars -->
+    <color name="avatar_user1_bg">#182338</color>
+    <color name="avatar_user1_text">#94B8FF</color>
+    <color name="avatar_user2_bg">#171717</color>
+    <color name="avatar_user2_text">#CBD5E1</color>
+    <color name="avatar_user3_bg">#171717</color>
+    <color name="avatar_user3_text">#CBD5E1</color>
+    
+    <!-- Photo Tile Fallbacks -->
+    <color name="photo_tile_1">#7E99B7</color>
+    <color name="photo_tile_2">#A39171</color>
+    <color name="photo_tile_3">#4A6B82</color>
+    <color name="photo_tile_4">#8C6D62</color>
+    <color name="photo_tile_5">#4E8752</color>
+    <color name="photo_tile_6">#D97706</color>
+    
+    <!-- Navigation High Contrast (AMOLED Dark) -->
+    <color name="nav_selected">#6B9CFF</color>
+    <color name="nav_unselected">#A1A1AA</color>
+    <color name="nav_indicator">#171717</color>
+</resources>
