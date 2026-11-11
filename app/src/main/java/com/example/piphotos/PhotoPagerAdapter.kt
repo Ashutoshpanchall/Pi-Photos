@@ -8,23 +8,21 @@ import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.SeekBar
 import android.widget.TextView
-import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import coil.size.Scale
-import com.example.piphotos.media.FrostedGlassHelper
 import com.example.piphotos.media.LocalMediaItem
 import java.util.Locale
 
 class PhotoPagerAdapter(
     private var items: List<LocalMediaItem>,
     private val onSingleTap: () -> Unit,
-    private val onZoomStateChanged: (position: Int, isZoomed: Boolean) -> Unit
+    private val onZoomStateChanged: (position: Int, isZoomed: Boolean) -> Unit,
+    var onPlaybackProgress: ((currentMs: Long, totalMs: Long, isPlaying: Boolean) -> Unit)? = null
 ) : RecyclerView.Adapter<PhotoPagerAdapter.PhotoViewHolder>() {
 
     private val attachedHolders = mutableMapOf<Int, PhotoViewHolder>()
@@ -62,7 +60,7 @@ class PhotoPagerAdapter(
         activePlayerPosition = position
         attachedHolders.forEach { (pos, holder) ->
             if (pos == position) {
-                holder.bindPlayer(player)
+                holder.bindPlayer(player, onPlaybackProgress)
             } else {
                 holder.unbindPlayer()
             }
@@ -86,7 +84,7 @@ class PhotoPagerAdapter(
         val item = items[position]
         holder.bind(item, areControlsVisible)
         if (position == activePlayerPosition && activePlayer != null) {
-            holder.bindPlayer(activePlayer)
+            holder.bindPlayer(activePlayer, onPlaybackProgress)
         } else {
             holder.unbindPlayer()
         }
@@ -98,7 +96,7 @@ class PhotoPagerAdapter(
         if (pos != RecyclerView.NO_POSITION) {
             attachedHolders[pos] = holder
             if (pos == activePlayerPosition && activePlayer != null) {
-                holder.bindPlayer(activePlayer)
+                holder.bindPlayer(activePlayer, onPlaybackProgress)
             }
         }
     }
@@ -127,43 +125,19 @@ class PhotoPagerAdapter(
         private val ivCenterPlayPause: ImageView = itemView.findViewById(R.id.ivCenterPlayPause)
         private val btnRewind10: FrameLayout = itemView.findViewById(R.id.btnRewind10)
         private val btnForward10: FrameLayout = itemView.findViewById(R.id.btnForward10)
-        private val videoBottomControls: View = itemView.findViewById(R.id.videoBottomControls)
-        private val videoSeekBar: SeekBar = itemView.findViewById(R.id.videoSeekBar)
-        private val tvCurrentTime: TextView = itemView.findViewById(R.id.tvCurrentTime)
-        private val tvTotalDuration: TextView = itemView.findViewById(R.id.tvTotalDuration)
-        private val btnPlaybackSpeed: TextView = itemView.findViewById(R.id.btnPlaybackSpeed)
-        private val btnMuteToggle: ImageView = itemView.findViewById(R.id.btnMuteToggle)
 
         private val handler = Handler(Looper.getMainLooper())
         private var boundPlayer: ExoPlayer? = null
         private var currentItem: LocalMediaItem? = null
-        private var isUserTrackingTouch = false
-        private var isMuted = false
-        private var currentSpeedIndex = 1 // 1.0x default
-        private val speedOptions = floatArrayOf(0.5f, 1.0f, 1.5f, 2.0f)
-
-        private val autoHideRunnable = Runnable {
-            if (boundPlayer?.isPlaying == true) {
-                videoOverlayContainer.animate()
-                    .alpha(0f)
-                    .setDuration(220L)
-                    .withEndAction { videoOverlayContainer.visibility = View.GONE }
-                    .start()
-            }
-        }
+        private var progressCallback: ((Long, Long, Boolean) -> Unit)? = null
 
         private val progressUpdateRunnable = object : Runnable {
             override fun run() {
                 val player = boundPlayer
                 if (player != null && player.isPlaying) {
-                    if (!isUserTrackingTouch) {
-                        val currentMs = player.currentPosition
-                        val totalMs = player.duration.coerceAtLeast(1L)
-                        videoSeekBar.max = totalMs.toInt()
-                        videoSeekBar.progress = currentMs.toInt()
-                        tvCurrentTime.text = formatMs(currentMs)
-                        tvTotalDuration.text = formatMs(totalMs)
-                    }
+                    val currentMs = player.currentPosition
+                    val totalMs = player.duration.coerceAtLeast(1L)
+                    progressCallback?.invoke(currentMs, totalMs, true)
                     handler.postDelayed(this, 250)
                 }
             }
@@ -172,13 +146,16 @@ class PhotoPagerAdapter(
         private val playerListener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 updatePlayPauseIcon(isPlaying)
+                val player = boundPlayer
+                if (player != null) {
+                    val currentMs = player.currentPosition
+                    val totalMs = player.duration.coerceAtLeast(1L)
+                    progressCallback?.invoke(currentMs, totalMs, isPlaying)
+                }
                 if (isPlaying) {
                     handler.post(progressUpdateRunnable)
-                    scheduleAutoHide()
                 } else {
                     handler.removeCallbacks(progressUpdateRunnable)
-                    cancelAutoHide()
-                    setOverlayControlsVisible(true)
                 }
             }
 
@@ -187,9 +164,8 @@ class PhotoPagerAdapter(
                 if (playbackState == Player.STATE_READY) {
                     val durationMs = player.duration
                     if (durationMs > 0) {
-                        videoSeekBar.max = durationMs.toInt()
-                        tvTotalDuration.text = formatMs(durationMs)
                         tvDurationBadge.text = formatMs(durationMs)
+                        progressCallback?.invoke(player.currentPosition, durationMs, player.isPlaying)
                     }
                 }
             }
@@ -202,11 +178,7 @@ class PhotoPagerAdapter(
                 if (pos != RecyclerView.NO_POSITION) onZoomStateChanged(pos, zoomed)
             }
 
-            // Apply Apple glass effect to video bottom scrubber bar
-            FrostedGlassHelper.applyGlass(videoBottomControls, blurRadiusDp = 20f)
-
             btnCenterPlayPause.setOnClickListener {
-                resetAutoHide()
                 val player = boundPlayer ?: return@setOnClickListener
                 if (player.isPlaying) {
                     player.pause()
@@ -219,74 +191,19 @@ class PhotoPagerAdapter(
             }
 
             btnRewind10.setOnClickListener {
-                resetAutoHide()
                 val player = boundPlayer ?: return@setOnClickListener
                 val target = (player.currentPosition - 10000L).coerceAtLeast(0L)
                 player.seekTo(target)
             }
 
             btnForward10.setOnClickListener {
-                resetAutoHide()
                 val player = boundPlayer ?: return@setOnClickListener
                 val target = (player.currentPosition + 10000L).coerceAtMost(player.duration)
                 player.seekTo(target)
             }
 
-            btnMuteToggle.setOnClickListener {
-                resetAutoHide()
-                val player = boundPlayer ?: return@setOnClickListener
-                isMuted = !isMuted
-                player.volume = if (isMuted) 0f else 1f
-                btnMuteToggle.setImageResource(if (isMuted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
-            }
-
-            btnPlaybackSpeed.setOnClickListener {
-                resetAutoHide()
-                val player = boundPlayer ?: return@setOnClickListener
-                currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
-                val newSpeed = speedOptions[currentSpeedIndex]
-                player.playbackParameters = PlaybackParameters(newSpeed)
-                btnPlaybackSpeed.text = String.format(Locale.US, "%.1fx", newSpeed)
-            }
-
-            videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) {
-                        tvCurrentTime.text = formatMs(progress.toLong())
-                    }
-                }
-
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {
-                    isUserTrackingTouch = true
-                    cancelAutoHide()
-                }
-
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                    isUserTrackingTouch = false
-                    val player = boundPlayer ?: return
-                    val targetMs = seekBar?.progress?.toLong() ?: 0L
-                    player.seekTo(targetMs)
-                    scheduleAutoHide()
-                }
-            })
-
             itemView.setOnClickListener {
                 onSingleTap()
-            }
-        }
-
-        private fun scheduleAutoHide() {
-            handler.removeCallbacks(autoHideRunnable)
-            handler.postDelayed(autoHideRunnable, 2500L)
-        }
-
-        private fun cancelAutoHide() {
-            handler.removeCallbacks(autoHideRunnable)
-        }
-
-        private fun resetAutoHide() {
-            if (boundPlayer?.isPlaying == true) {
-                scheduleAutoHide()
             }
         }
 
@@ -305,10 +222,7 @@ class PhotoPagerAdapter(
                 playerView.visibility = View.VISIBLE
                 videoOverlayContainer.visibility = if (areControlsVisible) View.VISIBLE else View.GONE
                 val initialDuration = item.durationMs
-                tvTotalDuration.text = formatMs(initialDuration)
                 tvDurationBadge.text = formatMs(initialDuration)
-                tvCurrentTime.text = "0:00"
-                videoSeekBar.progress = 0
             } else {
                 unbindPlayer()
                 playerView.visibility = View.GONE
@@ -343,7 +257,7 @@ class PhotoPagerAdapter(
             }
         }
 
-        fun bindPlayer(player: ExoPlayer?) {
+        fun bindPlayer(player: ExoPlayer?, callback: ((Long, Long, Boolean) -> Unit)?) {
             if (boundPlayer == player && playerView.player == player) return
             unbindPlayer()
 
@@ -351,6 +265,7 @@ class PhotoPagerAdapter(
             if (!item.isVideo || player == null) return
 
             boundPlayer = player
+            progressCallback = callback
             playerView.player = player
             player.addListener(playerListener)
 
@@ -360,18 +275,17 @@ class PhotoPagerAdapter(
             updatePlayPauseIcon(player.isPlaying)
             if (player.isPlaying) {
                 handler.post(progressUpdateRunnable)
-                scheduleAutoHide()
             }
         }
 
         fun unbindPlayer() {
-            cancelAutoHide()
             handler.removeCallbacks(progressUpdateRunnable)
             boundPlayer?.removeListener(playerListener)
             if (playerView.player != null) {
                 playerView.player = null
             }
             boundPlayer = null
+            progressCallback = null
             updatePlayPauseIcon(false)
         }
 
@@ -385,14 +299,9 @@ class PhotoPagerAdapter(
             val item = currentItem ?: return
             if (item.isVideo) {
                 if (visible) {
-                    cancelAutoHide()
                     videoOverlayContainer.visibility = View.VISIBLE
                     videoOverlayContainer.animate().alpha(1f).setDuration(200L).start()
-                    if (boundPlayer?.isPlaying == true) {
-                        scheduleAutoHide()
-                    }
                 } else {
-                    cancelAutoHide()
                     videoOverlayContainer.animate().alpha(0f).setDuration(200L).withEndAction {
                         videoOverlayContainer.visibility = View.GONE
                     }.start()

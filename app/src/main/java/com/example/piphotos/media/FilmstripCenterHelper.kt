@@ -58,10 +58,9 @@ object FilmstripCenterHelper {
     }
 
     /**
-     * Smoothly scrolls the [RecyclerView] to position [targetPosition] so that its center aligns
-     * with the horizontal center of the [RecyclerView].
+     * Scrolls the [RecyclerView] so that the item at [targetPosition] is centered.
      */
-    fun scrollToCenter(recyclerView: RecyclerView, targetPosition: Int, itemWidthPx: Int) {
+    fun scrollToCenter(recyclerView: RecyclerView, targetPosition: Int, itemWidthPx: Int, smooth: Boolean = true) {
         val layoutManager = recyclerView.layoutManager as? LinearLayoutManager ?: return
         if (targetPosition < 0 || targetPosition >= (recyclerView.adapter?.itemCount ?: 0)) return
 
@@ -72,12 +71,17 @@ object FilmstripCenterHelper {
             val viewCenter = (view.left + view.right) / 2
             val deltaX = viewCenter - rvCenter
             if (deltaX != 0) {
-                recyclerView.smoothScrollBy(deltaX, 0)
+                if (smooth) {
+                    recyclerView.smoothScrollBy(deltaX, 0)
+                } else {
+                    recyclerView.scrollBy(deltaX, 0)
+                }
             }
         } else {
-            // If target item is off-screen, calculate offset using start padding
-            val padding = computeStartEndPadding(recyclerView.width, itemWidthPx)
-            layoutManager.scrollToPositionWithOffset(targetPosition, padding)
+            // Off-screen: since padding is set to (width - itemWidth) / 2,
+            // scrolling with offset 0 places the item's left edge exactly at paddingLeft = (width - itemWidth) / 2,
+            // which centers the item!
+            layoutManager.scrollToPositionWithOffset(targetPosition, 0)
         }
     }
 }

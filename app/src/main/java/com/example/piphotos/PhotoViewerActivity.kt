@@ -6,8 +6,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.HapticFeedbackConstants
 import android.view.View
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
@@ -25,8 +28,10 @@ import androidx.dynamicanimation.animation.SpringForce
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.LinearSnapHelper
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.example.piphotos.databinding.ActivityPhotoViewerBinding
@@ -34,7 +39,6 @@ import com.example.piphotos.DeleteResult
 import com.example.piphotos.LocalDeleteHandler
 import com.example.piphotos.media.FilmstripAdapter
 import com.example.piphotos.media.FilmstripCenterHelper
-import com.example.piphotos.media.FrostedGlassHelper
 import com.example.piphotos.media.LocalMediaIndex
 import com.example.piphotos.media.LocalMediaItem
 import com.example.piphotos.media.ViewerSession
@@ -58,6 +62,21 @@ class PhotoViewerActivity : AppCompatActivity() {
     private var currentPageZoomed: Boolean = false
 
     private var exoPlayer: ExoPlayer? = null
+    private var isMuted = false
+    private var currentSpeedIndex = 1 // 1.0x default
+    private val speedOptions = floatArrayOf(0.5f, 1.0f, 1.5f, 2.0f)
+    private var isUserTrackingSeekBar = false
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val videoControlsAutoHideRunnable = Runnable {
+        if (exoPlayer?.isPlaying == true && areToolbarsVisible) {
+            binding.videoControlsBar.animate()
+                .alpha(0f)
+                .setDuration(220L)
+                .withEndAction { binding.videoControlsBar.visibility = View.GONE }
+                .start()
+        }
+    }
 
     // Flags to eliminate recursive synchronization loops between ViewPager2 and Filmstrip
     private var isSyncingFromPager = false
@@ -74,8 +93,11 @@ class PhotoViewerActivity : AppCompatActivity() {
                     closeViewerInstant()
                 } else {
                     adapter.notifyItemRemoved(currentPosition)
-                    filmstripAdapter.submitList(mediaItems.toList())
                     currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
+                    filmstripAdapter.submitList(mediaItems.toList()) {
+                        val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
+                        FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
+                    }
                     binding.viewPager.setCurrentItem(currentPosition, false)
                     filmstripAdapter.setSelectedPosition(currentPosition)
                     attachActivePlayerToCurrentPage()
@@ -96,13 +118,8 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding = ActivityPhotoViewerBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Apply Apple frosted glass effect to chrome surfaces
-        FrostedGlassHelper.applyGlass(binding.topBar, blurRadiusDp = 24f)
-        FrostedGlassHelper.applyGlass(binding.filmstripContainer, blurRadiusDp = 20f)
-        FrostedGlassHelper.applyGlass(binding.bottomBar, blurRadiusDp = 24f)
-
         // System Insets: Apply padding so media draws edge-to-edge behind bars
-        ViewCompat.setOnApplyWindowInsetsListener(binding.topBar) { v, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(binding.topBar) { _, insets ->
             val statusBars = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
             val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout()).top
             binding.statusBarSpacer.layoutParams.height = maxOf(statusBars, cutout)
@@ -123,6 +140,7 @@ class PhotoViewerActivity : AppCompatActivity() {
         loadMediaList()
         setupViewPager()
         setupFilmstrip()
+        setupVideoControls()
         setupSwipeDismiss()
         setupTopBarActions()
         setupBottomBarActions()
@@ -165,6 +183,19 @@ class PhotoViewerActivity : AppCompatActivity() {
                 if (position == binding.viewPager.currentItem) {
                     currentPageZoomed = isZoomed
                 }
+            },
+            onPlaybackProgress = { currentMs, totalMs, isPlaying ->
+                if (!isUserTrackingSeekBar) {
+                    binding.videoSeekBar.max = totalMs.toInt()
+                    binding.videoSeekBar.progress = currentMs.toInt()
+                    binding.tvCurrentTime.text = formatDuration(currentMs)
+                    binding.tvTotalDuration.text = formatDuration(totalMs)
+                }
+                if (isPlaying) {
+                    scheduleVideoControlsAutoHide()
+                } else {
+                    cancelVideoControlsAutoHide()
+                }
             }
         )
 
@@ -183,8 +214,8 @@ class PhotoViewerActivity : AppCompatActivity() {
                 if (!isSyncingFromFilmstrip) {
                     isSyncingFromPager = true
                     filmstripAdapter.setSelectedPosition(position)
-                    val thumbWidthPx = (58 * resources.displayMetrics.density).toInt()
-                    FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, position, thumbWidthPx)
+                    val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
+                    FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, position, thumbWidthPx, smooth = true)
                     isSyncingFromPager = false
                 }
             }
@@ -204,15 +235,19 @@ class PhotoViewerActivity : AppCompatActivity() {
         val layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)
         binding.rvFilmstrip.layoutManager = layoutManager
         binding.rvFilmstrip.adapter = filmstripAdapter
-        filmstripAdapter.submitList(mediaItems.toList())
-        filmstripAdapter.setSelectedPosition(currentPosition)
 
-        // Compute start and end padding dynamically so index 0 and index N-1 can center
-        val thumbWidthPx = (58 * resources.displayMetrics.density).toInt()
+        // Attach snap helper for smooth center snapping
+        val snapHelper = LinearSnapHelper()
+        snapHelper.attachToRecyclerView(binding.rvFilmstrip)
+
+        val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
         binding.rvFilmstrip.post {
             val padding = FilmstripCenterHelper.computeStartEndPadding(binding.rvFilmstrip.width, thumbWidthPx)
             binding.rvFilmstrip.setPadding(padding, 0, padding, 0)
-            FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx)
+            filmstripAdapter.submitList(mediaItems.toList()) {
+                FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
+            }
+            filmstripAdapter.setSelectedPosition(currentPosition)
         }
 
         // Center-based filmstrip selection on scroll & fling settle
@@ -234,6 +269,54 @@ class PhotoViewerActivity : AppCompatActivity() {
         })
     }
 
+    private fun setupVideoControls() {
+        binding.videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    binding.tvCurrentTime.text = formatDuration(progress.toLong())
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                isUserTrackingSeekBar = true
+                cancelVideoControlsAutoHide()
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                isUserTrackingSeekBar = false
+                val targetMs = seekBar?.progress?.toLong() ?: 0L
+                exoPlayer?.seekTo(targetMs)
+                scheduleVideoControlsAutoHide()
+            }
+        })
+
+        binding.btnPlaybackSpeed.setOnClickListener {
+            val player = exoPlayer ?: return@setOnClickListener
+            currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
+            val newSpeed = speedOptions[currentSpeedIndex]
+            player.playbackParameters = PlaybackParameters(newSpeed)
+            binding.btnPlaybackSpeed.text = String.format(Locale.US, "%.1fx", newSpeed)
+            scheduleVideoControlsAutoHide()
+        }
+
+        binding.btnMuteToggle.setOnClickListener {
+            val player = exoPlayer ?: return@setOnClickListener
+            isMuted = !isMuted
+            player.volume = if (isMuted) 0f else 1f
+            binding.btnMuteToggle.setImageResource(if (isMuted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
+            scheduleVideoControlsAutoHide()
+        }
+    }
+
+    private fun scheduleVideoControlsAutoHide() {
+        handler.removeCallbacks(videoControlsAutoHideRunnable)
+        handler.postDelayed(videoControlsAutoHideRunnable, 2500L)
+    }
+
+    private fun cancelVideoControlsAutoHide() {
+        handler.removeCallbacks(videoControlsAutoHideRunnable)
+    }
+
     private fun initPlayer() {
         if (exoPlayer == null) {
             val player = ExoPlayer.Builder(this).build()
@@ -242,6 +325,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
                 .build()
             player.setAudioAttributes(audioAttrs, true)
+            player.volume = if (isMuted) 0f else 1f
             exoPlayer = player
         }
     }
@@ -251,9 +335,17 @@ class PhotoViewerActivity : AppCompatActivity() {
         if (item != null && item.isVideo) {
             initPlayer()
             adapter.attachPlayerToPosition(exoPlayer, currentPosition)
+            if (areToolbarsVisible) {
+                binding.videoControlsBar.visibility = View.VISIBLE
+                binding.videoControlsBar.alpha = 1f
+            }
+            binding.tvTotalDuration.text = formatDuration(item.durationMs)
+            binding.videoSeekBar.max = item.durationMs.toInt()
         } else {
             exoPlayer?.pause()
             adapter.detachPlayer()
+            binding.videoControlsBar.visibility = View.GONE
+            cancelVideoControlsAutoHide()
         }
     }
 
@@ -284,7 +376,7 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding.tvViewerDate.text = dateFormat.format(dateObj)
         binding.tvViewerTime.text = timeFormat.format(dateObj).lowercase(Locale.getDefault())
 
-        // Update floating media counter (e.g. "3 / 24")
+        // Floating media counter (e.g. "3 / 24")
         binding.tvMediaCounter.text = "${currentPosition + 1} / ${mediaItems.size}"
 
         val favIds = LocalMediaIndex.getInstance(applicationContext).favoritesRepo.idsFlow.value
@@ -429,8 +521,11 @@ class PhotoViewerActivity : AppCompatActivity() {
                                 closeViewerInstant()
                             } else {
                                 adapter.notifyItemRemoved(currentPosition)
-                                filmstripAdapter.submitList(mediaItems.toList())
                                 currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
+                                filmstripAdapter.submitList(mediaItems.toList()) {
+                                    val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
+                                    FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
+                                }
                                 binding.viewPager.setCurrentItem(currentPosition, false)
                                 filmstripAdapter.setSelectedPosition(currentPosition)
                                 attachActivePlayerToCurrentPage()
@@ -494,7 +589,24 @@ class PhotoViewerActivity : AppCompatActivity() {
         springTop.start()
         springBottom.start()
 
+        val isVideo = mediaItems.getOrNull(currentPosition)?.isVideo == true
+        if (areToolbarsVisible && isVideo) {
+            binding.videoControlsBar.visibility = View.VISIBLE
+            binding.videoControlsBar.alpha = 1f
+            scheduleVideoControlsAutoHide()
+        } else {
+            binding.videoControlsBar.visibility = View.GONE
+            cancelVideoControlsAutoHide()
+        }
+
         adapter.setControlsVisibility(areToolbarsVisible)
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val totalSec = (ms / 1000L).coerceAtLeast(0L)
+        val min = totalSec / 60
+        val sec = totalSec % 60
+        return String.format(Locale.US, "%d:%02d", min, sec)
     }
 
     override fun onStop() {
@@ -507,6 +619,7 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cancelVideoControlsAutoHide()
         exoPlayer?.release()
         exoPlayer = null
         ViewerSession.clearSession(sessionId)

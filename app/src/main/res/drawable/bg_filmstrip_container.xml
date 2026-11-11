@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Dark glass background -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#B30F0F0F" />
+        </shape>
+    </item>
+    <!-- Hairline top border -->
+    <item android:top="0dp">
+        <shape android:shape="rectangle">
+            <stroke
+                android:width="0.5dp"
+                android:color="#26FFFFFF" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+    <!-- Hairline bottom border -->
+    <item android:bottom="0dp">
+        <shape android:shape="rectangle">
+            <stroke
+                android:width="0.5dp"
+                android:color="#26FFFFFF" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+</layer-list>

@@ -2,8 +2,12 @@ package com.example.piphotos
 
 import android.app.Application
 import android.os.StrictMode
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.decode.VideoFrameDecoder
 
-class PiPhotosApp : Application() {
+class PiPhotosApp : Application(), ImageLoaderFactory {
+
     override fun onCreate() {
         super.onCreate()
         if (BuildConfig.DEBUG) {
@@ -21,5 +25,13 @@ class PiPhotosApp : Application() {
             )
         }
     }
-}
 
+    override fun newImageLoader(): ImageLoader {
+        return ImageLoader.Builder(this)
+            .components {
+                add(VideoFrameDecoder.Factory())
+            }
+            .crossfade(true)
+            .build()
+    }
+}
