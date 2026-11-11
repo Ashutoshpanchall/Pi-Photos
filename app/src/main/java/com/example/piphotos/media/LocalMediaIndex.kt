@@ -43,9 +43,13 @@ class LocalMediaIndex(private val appContext: Context) {
 
     // Single source of truth for in-memory index, kept sorted by effectiveDateMs DESC
     private val items = ArrayList<LocalMediaItem>()
+    private var revision: Long = 0L
 
     private val _mediaFlow = MutableStateFlow<List<LocalMediaItem>>(emptyList())
     val mediaFlow: StateFlow<List<LocalMediaItem>> = _mediaFlow.asStateFlow()
+
+    private val _indexStateFlow = MutableStateFlow<IndexState>(IndexState.Loading)
+    val indexStateFlow: StateFlow<IndexState> = _indexStateFlow.asStateFlow()
 
     private val _statsFlow = MutableStateFlow(IndexStats())
     val statsFlow: StateFlow<IndexStats> = _statsFlow.asStateFlow()
@@ -113,7 +117,10 @@ class LocalMediaIndex(private val appContext: Context) {
         lastGeneration = stats.generation
         lastVersion = stats.mediaStoreVersion
 
-        _mediaFlow.value = ArrayList(items)
+        revision++
+        val copied = ArrayList(items)
+        _mediaFlow.value = copied
+        _indexStateFlow.value = IndexState.Ready(copied, revision)
         _statsFlow.value = stats
 
         startObserving()
@@ -129,17 +136,16 @@ class LocalMediaIndex(private val appContext: Context) {
 
             val startTime = SystemClock.elapsedRealtime()
 
-            // 1. Detect and prune deletions by re-reading active IDs
+            // 1. Detect and prune deletions & fetch modified/new items
             val activeIds = scanner.queryActiveIds()
-            items.removeAll { it.id !in activeIds }
-
-            // 2. Fetch modified or new items since lastGeneration
             val modifiedItems = scanner.performDeltaScan(lastGeneration)
-            if (modifiedItems.isNotEmpty()) {
-                val modifiedIds = modifiedItems.map { it.id }.toSet()
-                items.removeAll { it.id in modifiedIds }
-                items.addAll(modifiedItems)
-                items.sortByDescending { it.effectiveDateMs }
+            val hasChanged = IndexDeltaApplier.applyDelta(items, activeIds, modifiedItems)
+
+            if (hasChanged || _indexStateFlow.value !is IndexState.Ready) {
+                revision++
+                val copied = ArrayList(items)
+                _mediaFlow.value = copied
+                _indexStateFlow.value = IndexState.Ready(copied, revision)
             }
 
             val newMaxGen = modifiedItems.maxOfOrNull { it.generationModified } ?: lastGeneration
@@ -164,7 +170,6 @@ class LocalMediaIndex(private val appContext: Context) {
                 folderBreakdown = foldersMap
             )
 
-            _mediaFlow.value = ArrayList(items)
             _statsFlow.value = updatedStats
             updatedStats
         }
@@ -256,5 +261,28 @@ class LocalMediaIndex(private val appContext: Context) {
                 INSTANCE ?: LocalMediaIndex(context.applicationContext).also { INSTANCE = it }
             }
         }
+    }
+}
+
+sealed class IndexState {
+    object Loading : IndexState()
+    data class Ready(val items: List<LocalMediaItem>, val revision: Long) : IndexState()
+}
+
+object IndexDeltaApplier {
+    fun applyDelta(
+        currentItems: MutableList<LocalMediaItem>,
+        activeIds: Set<Long>,
+        modifiedItems: List<LocalMediaItem>
+    ): Boolean {
+        val removedAny = currentItems.removeAll { it.id !in activeIds }
+        val addedOrModified = modifiedItems.isNotEmpty()
+        if (addedOrModified) {
+            val modifiedIds = modifiedItems.map { it.id }.toSet()
+            currentItems.removeAll { it.id in modifiedIds }
+            currentItems.addAll(modifiedItems)
+            currentItems.sortByDescending { it.effectiveDateMs }
+        }
+        return removedAny || addedOrModified
     }
 }

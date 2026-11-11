@@ -24,12 +24,19 @@ class TimelineAdapter(
 
     var isSelectionMode: Boolean = false
         set(value) {
+            if (field == value) return
             field = value
             if (!value) {
+                val previouslySelected = selectedIds.toSet()
                 selectedIds.clear()
                 onSelectionChanged(emptySet())
+                for (id in previouslySelected) {
+                    val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
+                    if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+                }
+            } else {
+                notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
             }
-            notifyDataSetChanged()
         }
 
     val selectedIds = mutableSetOf<Long>()
@@ -66,6 +73,19 @@ class TimelineAdapter(
         }
     }
 
+    override fun onBindViewHolder(
+        holder: RecyclerView.ViewHolder,
+        position: Int,
+        payloads: List<Any>
+    ) {
+        if (payloads.contains(PAYLOAD_SELECTION) && holder is MediaViewHolder) {
+            val row = getItem(position) as? TimelineRow.MediaRow ?: return
+            holder.updateSelection(row.item.id)
+        } else {
+            super.onBindViewHolder(holder, position, payloads)
+        }
+    }
+
     fun toggleSelection(id: Long) {
         if (selectedIds.contains(id)) {
             selectedIds.remove(id)
@@ -76,22 +96,33 @@ class TimelineAdapter(
         } else {
             selectedIds.add(id)
         }
-        notifyDataSetChanged()
+        val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
+        if (pos >= 0) {
+            notifyItemChanged(pos, PAYLOAD_SELECTION)
+        }
         onSelectionChanged(selectedIds.toSet())
     }
 
     fun selectAll() {
         val allIds = currentList.mapNotNull { (it as? TimelineRow.MediaRow)?.item?.id }
+        val toUpdate = (allIds.toSet() - selectedIds)
         selectedIds.clear()
         selectedIds.addAll(allIds)
-        notifyDataSetChanged()
+        for (id in toUpdate) {
+            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
+            if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+        }
         onSelectionChanged(selectedIds.toSet())
     }
 
     fun clearSelection() {
+        val previouslySelected = selectedIds.toSet()
         selectedIds.clear()
         isSelectionMode = false
-        notifyDataSetChanged()
+        for (id in previouslySelected) {
+            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
+            if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+        }
         onSelectionChanged(emptySet())
     }
 
@@ -111,6 +142,33 @@ class TimelineAdapter(
 
     inner class MediaViewHolder(private val binding: ItemMediaTileBinding) :
         RecyclerView.ViewHolder(binding.root) {
+
+        init {
+            binding.root.setOnClickListener {
+                val pos = bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    val row = getItem(pos) as? TimelineRow.MediaRow ?: return@setOnClickListener
+                    if (isSelectionMode) {
+                        toggleSelection(row.item.id)
+                    } else {
+                        onItemClick(row.item)
+                    }
+                }
+            }
+
+            binding.root.setOnLongClickListener {
+                val pos = bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    val row = getItem(pos) as? TimelineRow.MediaRow ?: return@setOnLongClickListener false
+                    it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    if (!isSelectionMode) {
+                        isSelectionMode = true
+                    }
+                    toggleSelection(row.item.id)
+                    true
+                } else false
+            }
+        }
 
         fun bind(item: LocalMediaItem) {
             // Sized thumbnail with Coil ~320px (never load full res)
@@ -133,7 +191,11 @@ class TimelineAdapter(
             }
 
             // Selection state
-            val isSelected = selectedIds.contains(item.id)
+            updateSelection(item.id)
+        }
+
+        fun updateSelection(itemId: Long) {
+            val isSelected = selectedIds.contains(itemId)
             if (isSelectionMode) {
                 binding.layoutCheckOverlay.visibility = View.VISIBLE
                 if (isSelected) {
@@ -144,29 +206,13 @@ class TimelineAdapter(
             } else {
                 binding.layoutCheckOverlay.visibility = View.GONE
             }
-
-            binding.root.setOnClickListener {
-                if (isSelectionMode) {
-                    toggleSelection(item.id)
-                } else {
-                    onItemClick(item)
-                }
-            }
-
-            binding.root.setOnLongClickListener {
-                it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                if (!isSelectionMode) {
-                    isSelectionMode = true
-                }
-                toggleSelection(item.id)
-                true
-            }
         }
     }
 
     companion object {
         const val VIEW_TYPE_HEADER = 0
         const val VIEW_TYPE_MEDIA = 1
+        const val PAYLOAD_SELECTION = "PAYLOAD_SELECTION"
     }
 }
 

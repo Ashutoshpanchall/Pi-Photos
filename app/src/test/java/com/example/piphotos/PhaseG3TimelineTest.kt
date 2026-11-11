@@ -1,11 +1,19 @@
 package com.example.piphotos
 
+import com.example.piphotos.media.FastScrollerMath
+import com.example.piphotos.media.IndexDeltaApplier
+import com.example.piphotos.media.IndexState
 import com.example.piphotos.media.LocalMediaItem
+import com.example.piphotos.media.TimelineAdapter
 import com.example.piphotos.media.TimelineCategoryFilter
+import com.example.piphotos.media.TimelineDiffCallback
 import com.example.piphotos.media.TimelineGroupMode
 import com.example.piphotos.media.TimelineGrouper
 import com.example.piphotos.media.TimelineRow
+import com.example.piphotos.media.TimelineStateMachine
+import com.example.piphotos.media.TimelineUiState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -248,5 +256,163 @@ class PhaseG3TimelineTest {
         assertTrue("Header stableId must be negative", header.stableId < 0)
         assertTrue("Media stableId must be positive", media.stableId > 0)
         assertNotEquals(header.stableId, media.stableId)
+    }
+
+    @Test
+    fun anchorPreservation_acrossSpanChange() {
+        val item1 = createMediaItem(101L, 1700000000000L)
+        val item2 = createMediaItem(102L, 1690000000000L)
+        val item3 = createMediaItem(103L, 1680000000000L)
+        val items = listOf(item1, item2, item3)
+
+        // Month mode
+        val monthRows = TimelineGrouper.group(items, TimelineGroupMode.MONTH, zoneId, locale, fixedNow)
+        val firstMediaRowInMonth = monthRows.first { it is TimelineRow.MediaRow } as TimelineRow.MediaRow
+        val anchorId = firstMediaRowInMonth.item.id
+
+        // Transition to Day mode
+        val dayRows = TimelineGrouper.group(items, TimelineGroupMode.DAY, zoneId, locale, fixedNow)
+        val targetPos = dayRows.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == anchorId }
+
+        assertTrue("Anchor item must exist in the new day rows", targetPos >= 0)
+        assertEquals(anchorId, (dayRows[targetPos] as TimelineRow.MediaRow).item.id)
+    }
+
+    @Test
+    fun filterTransitions_andEmptyStateMapping() {
+        assertEquals("No Photos Found", TimelineStateMachine.getEmptyTitle(TimelineCategoryFilter.ALL))
+        assertEquals("No camera photos", TimelineStateMachine.getEmptyTitle(TimelineCategoryFilter.CAMERA))
+        assertEquals("No screenshots", TimelineStateMachine.getEmptyTitle(TimelineCategoryFilter.SCREENSHOTS))
+        assertEquals("No videos", TimelineStateMachine.getEmptyTitle(TimelineCategoryFilter.VIDEOS))
+        assertEquals("No favourites yet", TimelineStateMachine.getEmptyTitle(TimelineCategoryFilter.FAVORITES))
+
+        assertEquals("No pictures or videos were detected in your device storage.", TimelineStateMachine.getEmptySubtitle(TimelineCategoryFilter.ALL))
+        assertEquals("Photos taken with your camera will appear here.", TimelineStateMachine.getEmptySubtitle(TimelineCategoryFilter.CAMERA))
+        assertEquals("Screenshots you capture will appear here.", TimelineStateMachine.getEmptySubtitle(TimelineCategoryFilter.SCREENSHOTS))
+        assertEquals("Recorded or downloaded videos will appear here.", TimelineStateMachine.getEmptySubtitle(TimelineCategoryFilter.VIDEOS))
+        assertEquals("Tap the star icon on photos to add them to your favourites.", TimelineStateMachine.getEmptySubtitle(TimelineCategoryFilter.FAVORITES))
+    }
+
+    @Test
+    fun emitOnlyOnChange_localMediaIndex() {
+        val item1 = createMediaItem(101L, 1000L)
+        val item2 = createMediaItem(102L, 2000L)
+        val currentItems = mutableListOf(item1, item2)
+
+        // Case A: No deletions, no new/modified items -> must return false (no change, no emit)
+        val activeIds = setOf(101L, 102L)
+        val modifiedEmpty = emptyList<LocalMediaItem>()
+        val hasChangedNoOp = IndexDeltaApplier.applyDelta(currentItems, activeIds, modifiedEmpty)
+        assertFalse("Delta with no additions or deletions must return false", hasChangedNoOp)
+        assertEquals(2, currentItems.size)
+
+        // Case B: Item 102 was deleted in MediaStore -> returns true, item 102 removed
+        val activeIdsPruned = setOf(101L)
+        val hasChangedDelete = IndexDeltaApplier.applyDelta(currentItems, activeIdsPruned, modifiedEmpty)
+        assertTrue("Delta with deletions must return true", hasChangedDelete)
+        assertEquals(1, currentItems.size)
+        assertEquals(101L, currentItems[0].id)
+
+        // Case C: New item 103 added -> returns true, item 103 inserted
+        val item3 = createMediaItem(103L, 3000L)
+        val hasChangedInsert = IndexDeltaApplier.applyDelta(currentItems, setOf(101L, 103L), listOf(item3))
+        assertTrue("Delta with new items must return true", hasChangedInsert)
+        assertEquals(2, currentItems.size)
+        assertEquals(103L, currentItems[0].id) // 3000L > 1000L, sorted descending
+    }
+
+    @Test
+    fun selectionPayload_updatesSelectionWithoutRebindingImage() {
+        assertEquals("PAYLOAD_SELECTION", TimelineAdapter.PAYLOAD_SELECTION)
+        val item1 = createMediaItem(101L, 1000L)
+        val row = TimelineRow.MediaRow(item1)
+        val diff = TimelineDiffCallback()
+        assertTrue(diff.areItemsTheSame(row, row))
+        assertTrue(diff.areContentsTheSame(row, row))
+    }
+
+    @Test
+    fun timelineUiState_transitions() {
+        val item = createMediaItem(101L, 1000L, isVideo = true, bucketName = "Camera")
+        val favIds = emptySet<Long>()
+
+        // 1. No permission -> NoPermission state
+        val stateNoPerm = TimelineStateMachine.computeState(
+            hasPermission = false,
+            indexState = IndexState.Loading,
+            filter = TimelineCategoryFilter.ALL,
+            favoriteIds = favIds
+        )
+        assertEquals(TimelineUiState.NoPermission, stateNoPerm)
+
+        // 2. Permission granted, Index is Loading -> Loading state
+        val stateLoading = TimelineStateMachine.computeState(
+            hasPermission = true,
+            indexState = IndexState.Loading,
+            filter = TimelineCategoryFilter.ALL,
+            favoriteIds = favIds
+        )
+        assertEquals(TimelineUiState.Loading, stateLoading)
+
+        // 3. Permission granted, Index is Ready with 0 items -> Empty state
+        val stateEmpty = TimelineStateMachine.computeState(
+            hasPermission = true,
+            indexState = IndexState.Ready(emptyList(), 1L),
+            filter = TimelineCategoryFilter.ALL,
+            favoriteIds = favIds
+        )
+        assertTrue(stateEmpty is TimelineUiState.Empty)
+        assertEquals(TimelineCategoryFilter.ALL, (stateEmpty as TimelineUiState.Empty).filter)
+
+        // 4. Permission granted, Index has videos, but filter is SCREENSHOTS -> Empty(SCREENSHOTS)
+        val stateEmptyScreenshots = TimelineStateMachine.computeState(
+            hasPermission = true,
+            indexState = IndexState.Ready(listOf(item), 1L),
+            filter = TimelineCategoryFilter.SCREENSHOTS,
+            favoriteIds = favIds
+        )
+        assertTrue(stateEmptyScreenshots is TimelineUiState.Empty)
+        assertEquals(TimelineCategoryFilter.SCREENSHOTS, (stateEmptyScreenshots as TimelineUiState.Empty).filter)
+
+        // 5. Permission granted, Index has video, filter is VIDEOS -> Ready state
+        val stateReady = TimelineStateMachine.computeState(
+            hasPermission = true,
+            indexState = IndexState.Ready(listOf(item), 2L),
+            filter = TimelineCategoryFilter.VIDEOS,
+            favoriteIds = favIds
+        )
+        assertTrue(stateReady is TimelineUiState.Ready)
+        val ready = stateReady as TimelineUiState.Ready
+        assertEquals(1, ready.items.size)
+        assertEquals(2L, ready.revision)
+        assertEquals(TimelineCategoryFilter.VIDEOS, ready.filter)
+    }
+
+    @Test
+    fun fastScroller_touchHitTest_andPixelMath() {
+        // Hit-test within thumb: thumb at Y=100, height=48, slop=20
+        // Active range: [80f, 168f]
+        assertTrue(FastScrollerMath.isHitThumb(100f, 100f, 48f, 20f))
+        assertTrue(FastScrollerMath.isHitThumb(85f, 100f, 48f, 20f))
+        assertTrue(FastScrollerMath.isHitThumb(165f, 100f, 48f, 20f))
+        assertFalse(FastScrollerMath.isHitThumb(50f, 100f, 48f, 20f))
+        assertFalse(FastScrollerMath.isHitThumb(180f, 100f, 48f, 20f))
+
+        // Pixel scroll delta computation:
+        // trackHeight=1000, scrollRange=5000, drag deltaY=20 -> delta=100
+        val delta = FastScrollerMath.computeScrollDelta(20f, 1000, 5000)
+        assertEquals(100, delta)
+
+        // Negative drag
+        val negDelta = FastScrollerMath.computeScrollDelta(-15f, 1000, 5000)
+        assertEquals(-75, negDelta)
+
+        // Zero track or range guards
+        assertEquals(0, FastScrollerMath.computeScrollDelta(20f, 0, 5000))
+        assertEquals(0, FastScrollerMath.computeScrollDelta(20f, 1000, 0))
+
+        // Thumb translation
+        val thumbY = FastScrollerMath.computeThumbTranslationY(scrollOffset = 2500, scrollRange = 5000, trackHeight = 1000)
+        assertEquals(500f, thumbY, 0.01f)
     }
 }

@@ -1,25 +1,41 @@
 package com.example.piphotos
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.GridLayoutManager
 import com.example.piphotos.databinding.ActivityAlbumDetailBinding
+import com.example.piphotos.DeleteResult
+import com.example.piphotos.LocalDeleteHandler
 import com.example.piphotos.media.LocalMediaIndex
+import com.example.piphotos.media.LocalMediaItem
 import kotlinx.coroutines.launch
 
 class AlbumDetailActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAlbumDetailBinding
-    private lateinit var adapter: MediaGridAdapter
     private var currentCategory: String = "Recents"
-    private var mediaItems: MutableList<MediaItem> = mutableListOf()
+    private var currentItems: List<LocalMediaItem> = emptyList()
+
+    private val intentSenderLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            binding.timelineView.clearSelection()
+            lifecycleScope.launch {
+                LocalMediaIndex.getInstance(applicationContext).refreshDelta()
+                loadData()
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeManager.applyTheme(this)
@@ -28,35 +44,44 @@ class AlbumDetailActivity : AppCompatActivity() {
         binding = ActivityAlbumDetailBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Robust edge-to-edge insets applied on root view with synchronous status bar fallback
         WindowInsetsHelper.applyEdgeToEdge(
             activity = this,
             rootView = binding.albumDetailRoot,
             statusBarSpacer = binding.statusBarSpacer,
             topBar = binding.albumTopBar,
             bottomBar = binding.layoutSelectionBar,
-            scrollableView = binding.rvMediaGrid,
+            scrollableView = null,
             extraTopDp = 0,
             extraBottomDp = 12
         )
 
         currentCategory = intent.getStringExtra(EXTRA_ALBUM_TITLE) ?: "Recents"
-        val subtitle = intent.getStringExtra(EXTRA_ALBUM_COUNT) ?: "Media Vault"
+        val subtitle = intent.getStringExtra(EXTRA_ALBUM_COUNT) ?: ""
 
         binding.tvAlbumDetailTitle.text = currentCategory
         binding.tvAlbumDetailCount.text = subtitle
 
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (binding.timelineView.isSelectionMode) {
+                    exitSelectionMode()
+                } else {
+                    finish()
+                }
+            }
+        })
+
         binding.btnAlbumBack.setOnClickListener {
-            if (adapter.isSelectionMode) {
+            if (binding.timelineView.isSelectionMode) {
                 exitSelectionMode()
             } else {
                 finish()
             }
         }
 
-        setupRecyclerView()
-        loadData()
+        setupTimelineView()
         setupActions()
+        loadData()
     }
 
     override fun onResume() {
@@ -64,48 +89,35 @@ class AlbumDetailActivity : AppCompatActivity() {
         loadData()
     }
 
-    private fun setupRecyclerView() {
-        adapter = MediaGridAdapter(
-            items = mediaItems,
-            onPhotoClick = { item ->
-                PhotoViewerActivity.start(
-                    context = this,
-                    photoId = item.id,
-                    drawableRes = item.drawableRes,
-                    title = item.title,
-                    date = item.date,
-                    category = currentCategory,
-                    contentUri = item.contentUri
-                )
-            },
-            onVideoClick = { item ->
-                PhotoViewerActivity.start(
-                    context = this,
-                    photoId = item.id,
-                    drawableRes = item.drawableRes,
-                    title = item.title,
-                    date = item.date,
-                    category = currentCategory,
-                    isVideo = true,
-                    contentUri = item.contentUri
-                )
-            },
-            onSelectionChanged = { count ->
-                if (count > 0) {
-                    binding.layoutSelectionBar.visibility = View.VISIBLE
-                    binding.tvSelectedCount.text = "$count selected"
+    private fun setupTimelineView() {
+        binding.timelineView.onItemClick = { item ->
+            PhotoViewerActivity.start(
+                context = this,
+                photoId = item.id.toString(),
+                drawableRes = 0,
+                title = "${if (item.isVideo) "VID" else "IMG"}_${item.id}",
+                date = "",
+                category = currentCategory,
+                isVideo = item.isVideo,
+                contentUri = item.contentUri.toString()
+            )
+        }
 
-                    val isTrash = currentCategory.equals("Trash", ignoreCase = true)
-                    binding.btnSelectionRestore.visibility = if (isTrash) View.VISIBLE else View.GONE
-                    binding.btnSelectionShare.visibility = if (isTrash) View.GONE else View.VISIBLE
-                } else {
-                    binding.layoutSelectionBar.visibility = View.GONE
-                }
+        binding.timelineView.onSelectionChanged = { selectedIds ->
+            val count = selectedIds.size
+            if (count > 0) {
+                binding.layoutSelectionBar.visibility = View.VISIBLE
+                binding.tvSelectedCount.text = "$count selected"
+                binding.btnSelect.text = "Cancel"
+
+                val isTrash = currentCategory.equals("Trash", ignoreCase = true)
+                binding.btnSelectionRestore.visibility = if (isTrash) View.VISIBLE else View.GONE
+                binding.btnSelectionShare.visibility = if (isTrash) View.GONE else View.VISIBLE
+            } else {
+                binding.layoutSelectionBar.visibility = View.GONE
+                binding.btnSelect.text = "Select"
             }
-        )
-
-        binding.rvMediaGrid.layoutManager = GridLayoutManager(this, 3)
-        binding.rvMediaGrid.adapter = adapter
+        }
     }
 
     private fun loadData() {
@@ -125,34 +137,28 @@ class AlbumDetailActivity : AppCompatActivity() {
                 }
             }
 
-            val favIds = index.favoritesRepo.getAllFavoriteIds()
-            mediaItems = if (localItems.isNotEmpty()) {
-                localItems.map { index.toUiMediaItem(it, isFav = favIds.contains(it.id)) }.toMutableList()
-            } else {
-                MediaRepository.getMediaForCategory(currentCategory).toMutableList()
-            }
+            currentItems = localItems
+            binding.timelineView.submitItems(localItems)
 
-            adapter.updateData(mediaItems)
-
-            val unit = if (currentCategory.equals("Videos", ignoreCase = true)) "videos" else "items"
-            binding.tvAlbumDetailCount.text = "${mediaItems.size} $unit"
+            val unit = if (currentCategory.equals("Videos", ignoreCase = true)) "videos" else "photos"
+            binding.tvAlbumDetailCount.text = "${localItems.size} $unit"
 
             val isTrash = currentCategory.equals("Trash", ignoreCase = true)
-            binding.layoutTrashBanner.visibility = if (isTrash && mediaItems.isNotEmpty()) View.VISIBLE else View.GONE
-            binding.btnEmptyTrash.visibility = if (isTrash && mediaItems.isNotEmpty()) View.VISIBLE else View.GONE
-            binding.btnSelect.visibility = if (isTrash && mediaItems.isEmpty()) View.GONE else View.VISIBLE
+            binding.layoutTrashBanner.visibility = if (isTrash && localItems.isNotEmpty()) View.VISIBLE else View.GONE
+            binding.btnEmptyTrash.visibility = if (isTrash && localItems.isNotEmpty()) View.VISIBLE else View.GONE
+            binding.btnSelect.visibility = if (localItems.isEmpty()) View.GONE else View.VISIBLE
 
-            if (mediaItems.isEmpty()) {
+            if (localItems.isEmpty()) {
                 showEmptyState()
             } else {
                 binding.layoutEmptyState.visibility = View.GONE
-                binding.rvMediaGrid.visibility = View.VISIBLE
+                binding.timelineView.visibility = View.VISIBLE
             }
         }
     }
 
     private fun showEmptyState() {
-        binding.rvMediaGrid.visibility = View.GONE
+        binding.timelineView.visibility = View.GONE
         binding.layoutEmptyState.visibility = View.VISIBLE
         binding.layoutSelectionBar.visibility = View.GONE
 
@@ -160,21 +166,21 @@ class AlbumDetailActivity : AppCompatActivity() {
             currentCategory.contains("Vault", ignoreCase = true) -> {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_lock)
                 binding.tvEmptyTitle.text = "Encrypted Vault is Empty"
-                binding.tvEmptySubtitle.text = "Items added to Encrypted Vault are encrypted with XChaCha20-Poly1305 and isolated from your gallery."
+                binding.tvEmptySubtitle.text = "Items added to Encrypted Vault are encrypted and isolated from your gallery."
                 binding.btnEmptyAction.text = "Return to Albums"
                 binding.btnEmptyAction.setOnClickListener { finish() }
             }
             currentCategory.equals("favorites", ignoreCase = true) -> {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_heart)
-                binding.tvEmptyTitle.text = "No Favorites Yet"
-                binding.tvEmptySubtitle.text = "Tap ♡ on any photo in your timeline to add it to your favorites."
+                binding.tvEmptyTitle.text = "No Favourites Yet"
+                binding.tvEmptySubtitle.text = "Tap the star icon on any photo in your timeline to add it to your favourites."
                 binding.btnEmptyAction.text = "Explore Photos"
                 binding.btnEmptyAction.setOnClickListener { finish() }
             }
             currentCategory.equals("trash", ignoreCase = true) -> {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_trash)
                 binding.tvEmptyTitle.text = "Trash is Empty"
-                binding.tvEmptySubtitle.text = "Photos and videos moved to trash will appear here for 30 days before permanent deletion."
+                binding.tvEmptySubtitle.text = "Photos and videos moved to trash will appear here."
                 binding.btnEmptyAction.text = "Return to Albums"
                 binding.btnEmptyAction.setOnClickListener { finish() }
             }
@@ -188,8 +194,8 @@ class AlbumDetailActivity : AppCompatActivity() {
             else -> {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_nav_albums)
                 binding.tvEmptyTitle.text = "This Album is Empty"
-                binding.tvEmptySubtitle.text = "Add photos to this album using the Select button from any photo collection."
-                binding.btnEmptyAction.text = "Add Photos"
+                binding.tvEmptySubtitle.text = "Add photos to this album from your photo collection."
+                binding.btnEmptyAction.text = "Return to Albums"
                 binding.btnEmptyAction.setOnClickListener { finish() }
             }
         }
@@ -197,97 +203,64 @@ class AlbumDetailActivity : AppCompatActivity() {
 
     private fun setupActions() {
         binding.btnSelect.setOnClickListener {
-            if (adapter.isSelectionMode) {
+            if (binding.timelineView.isSelectionMode) {
                 exitSelectionMode()
             } else {
-                adapter.isSelectionMode = true
+                binding.timelineView.isSelectionMode = true
                 binding.btnSelect.text = "Cancel"
             }
         }
 
-        binding.btnEmptyTrash.setOnClickListener {
-            AlertDialog.Builder(this)
-                .setTitle("Empty Trash?")
-                .setMessage("All items in Trash will be permanently deleted. This action cannot be undone.")
-                .setPositiveButton("Empty Trash") { _, _ ->
-                    val purged = MediaRepository.emptyTrash()
-                    Toast.makeText(this, "Purged $purged items permanently", Toast.LENGTH_SHORT).show()
-                    loadData()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
-
-        binding.btnSelectionRestore.setOnClickListener {
-            val count = adapter.selectedIds.size
-            adapter.selectedIds.forEach { id ->
-                MediaRepository.restoreFromTrash(id)
-            }
-            Toast.makeText(this, "Restored $count items to gallery", Toast.LENGTH_SHORT).show()
-            exitSelectionMode()
-            loadData()
-        }
-
         binding.btnSelectionShare.setOnClickListener {
-            val count = adapter.selectedIds.size
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, "Sharing $count items from Pi Photos")
+            val selected = binding.timelineView.selectedIds
+            val uris = ArrayList<Uri>()
+            for (item in currentItems) {
+                if (selected.contains(item.id)) {
+                    uris.add(item.contentUri)
+                }
             }
-            startActivity(Intent.createChooser(shareIntent, "Share"))
+            if (uris.isNotEmpty()) {
+                val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "image/*"
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(shareIntent, "Share ${uris.size} photos"))
+            }
             exitSelectionMode()
         }
 
-        binding.btnSelectionDownload.setOnClickListener {
-            val count = adapter.selectedIds.size
-            Toast.makeText(this, "Saved $count photos to device gallery", Toast.LENGTH_SHORT).show()
-            exitSelectionMode()
-        }
+        // Hide fake download button if present (photos are already on device)
+        binding.btnSelectionDownload.visibility = View.GONE
 
         binding.btnSelectionDelete.setOnClickListener {
-            val count = adapter.selectedIds.size
-            val isTrash = currentCategory.equals("Trash", ignoreCase = true)
-            val title = if (isTrash) "Permanently Delete $count items?" else "Move $count items to Trash?"
-            val msg = if (isTrash) {
-                "These items will be permanently erased. This cannot be undone."
-            } else {
-                "Selected items will be moved to Trash."
-            }
-            val confirmBtn = if (isTrash) "Delete Permanently" else "Move to Trash"
+            val selected = binding.timelineView.selectedIds.toList()
+            if (selected.isEmpty()) return@setOnClickListener
 
-            AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(msg)
-                .setPositiveButton(confirmBtn) { _, _ ->
-                    adapter.selectedIds.forEach { id ->
-                        if (isTrash) {
-                            MediaRepository.deletePermanently(id)
-                        } else {
-                            MediaRepository.moveToTrash(id)
-                        }
+            lifecycleScope.launch {
+                val deleteHandler = LocalDeleteHandler(this@AlbumDetailActivity)
+                when (val result = deleteHandler.trash(selected)) {
+                    is DeleteResult.Success -> {
+                        exitSelectionMode()
+                        LocalMediaIndex.getInstance(applicationContext).refreshDelta()
+                        loadData()
                     }
-                    val feedback = if (isTrash) "Permanently deleted $count items" else "Moved $count items to Trash"
-                    Toast.makeText(this, feedback, Toast.LENGTH_SHORT).show()
-                    exitSelectionMode()
-                    loadData()
+                    is DeleteResult.RequiresConfirmation -> {
+                        val request = IntentSenderRequest.Builder(result.intentSender).build()
+                        intentSenderLauncher.launch(request)
+                    }
+                    is DeleteResult.Error -> {
+                        Toast.makeText(this@AlbumDetailActivity, result.message, Toast.LENGTH_SHORT).show()
+                    }
                 }
-                .setNegativeButton("Cancel", null)
-                .show()
+            }
         }
     }
 
     private fun exitSelectionMode() {
-        adapter.isSelectionMode = false
+        binding.timelineView.clearSelection()
         binding.btnSelect.text = "Select"
         binding.layoutSelectionBar.visibility = View.GONE
-    }
-
-    override fun onBackPressed() {
-        if (adapter.isSelectionMode) {
-            exitSelectionMode()
-        } else {
-            super.onBackPressed()
-        }
     }
 
     companion object {

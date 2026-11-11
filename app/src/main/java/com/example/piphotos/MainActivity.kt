@@ -67,36 +67,25 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
             currentTabId = savedInstanceState.getInt(KEY_CURRENT_TAB, R.id.navigation_photos)
         }
 
-        setupFragments(savedInstanceState)
-        setupBottomNavigation()
-        setupBackNavigation()
-
-        if (savedInstanceState != null) {
-            binding.bottomNavigation.selectedItemId = currentTabId
-        }
-
-        checkWelcomeState(savedInstanceState)
-    }
-
-    private fun checkWelcomeState(savedInstanceState: Bundle?) {
         val hasAccess = PermissionHelper.hasAnyMediaAccess(this)
-        val fm = supportFragmentManager
-
         if (!hasAccess) {
             binding.bottomNavigation.visibility = View.GONE
-            val existingWelcome = fm.findFragmentByTag(TAG_WELCOME)
+            val existingWelcome = supportFragmentManager.findFragmentByTag(TAG_WELCOME)
             if (existingWelcome == null) {
-                fm.beginTransaction()
-                    .add(R.id.fragmentContainer, WelcomeFragment.newInstance(), TAG_WELCOME)
+                supportFragmentManager.beginTransaction()
+                    .replace(R.id.fragmentContainer, WelcomeFragment.newInstance(), TAG_WELCOME)
                     .commitNow()
             }
+            setupBackNavigation()
         } else {
             binding.bottomNavigation.visibility = View.VISIBLE
-            val existingWelcome = fm.findFragmentByTag(TAG_WELCOME)
-            if (existingWelcome != null) {
-                fm.beginTransaction().remove(existingWelcome).commitNow()
-            }
-            if (savedInstanceState == null) {
+            setupFragments(savedInstanceState)
+            setupBottomNavigation()
+            setupBackNavigation()
+
+            if (savedInstanceState != null) {
+                binding.bottomNavigation.selectedItemId = currentTabId
+            } else {
                 lifecycleScope.launch {
                     LocalMediaIndex.getInstance(applicationContext).rebuildIndex()
                 }
@@ -108,11 +97,15 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
         val fm = supportFragmentManager
         val welcome = fm.findFragmentByTag(TAG_WELCOME)
         if (welcome != null) {
-            fm.beginTransaction().remove(welcome).commitAllowingStateLoss()
+            fm.beginTransaction().remove(welcome).commitNow()
         }
-        binding.bottomNavigation.visibility = View.VISIBLE
-        lifecycleScope.launch {
-            LocalMediaIndex.getInstance(applicationContext).rebuildIndex()
+        if (granted || isPartial) {
+            binding.bottomNavigation.visibility = View.VISIBLE
+            setupFragments(null)
+            setupBottomNavigation()
+            lifecycleScope.launch {
+                LocalMediaIndex.getInstance(applicationContext).rebuildIndex()
+            }
         }
     }
 

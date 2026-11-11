@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvTimelineGrid"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipToPadding="false"
+        android:paddingBottom="80dp" />
+
+    <!-- Floating Sticky Date Header Overlay -->
+    <FrameLayout
+        android:id="@+id/stickyHeaderOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="12dp"
+        android:background="@drawable/bg_status_bar"
+        android:paddingStart="14dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvStickyHeaderTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <!-- Fast Scroller Track, Thumb, and Bubble -->
+    <RelativeLayout
+        android:id="@+id/layoutFastScroll"
+        android:layout_width="48dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:visibility="invisible">
+
+        <TextView
+            android:id="@+id/tvFastScrollBubble"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_centerVertical="true"
+            android:layout_marginEnd="12dp"
+            android:layout_toStartOf="@id/viewFastScrollThumb"
+            android:background="@drawable/bg_status_bar"
+            android:elevation="6dp"
+            android:paddingStart="12dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="6dp"
+            android:textColor="@color/primary_blue"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/viewFastScrollThumb"
+            android:layout_width="4dp"
+            android:layout_height="48dp"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/bg_fast_scroll_thumb" />
+    </RelativeLayout>
+</FrameLayout>
+

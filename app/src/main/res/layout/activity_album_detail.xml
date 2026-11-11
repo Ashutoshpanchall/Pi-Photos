@@ -138,14 +138,11 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Dynamic 3-Column RecyclerView (Full Screen Grid) -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvMediaGrid"
+    <!-- Reusable Timeline Grid Component -->
+    <com.example.piphotos.media.TimelineView
+        android:id="@+id/timelineView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:clipToPadding="false"
-        android:padding="1.5dp"
-        android:paddingBottom="48dp"
         app:layout_constraintBottom_toTopOf="@id/layoutSelectionBar"
         app:layout_constraintTop_toBottomOf="@id/layoutTrashBanner" />
 

@@ -189,6 +189,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_vertical"
+            app:selectionRequired="true"
             app:singleSelection="true">
 
             <com.google.android.material.chip.Chip
@@ -307,86 +308,72 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Timeline Grid Container -->
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/layoutTimelineContent"
+    <!-- Reusable Timeline Grid Component -->
+    <com.example.piphotos.media.TimelineView
+        android:id="@+id/timelineView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/bannerPartialAccess" />
+
+    <!-- Neutral Loading Skeleton (Placeholder Tiles with No Text) -->
+    <LinearLayout
+        android:id="@+id/layoutTimelineLoading"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:orientation="vertical"
+        android:padding="2dp"
+        android:visibility="visible"
+        app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintTop_toBottomOf="@id/bannerPartialAccess">
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/rvTimeline"
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clipToPadding="false"
-            android:paddingBottom="80dp" />
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+        </LinearLayout>
 
-        <!-- Floating Sticky Header Overlay -->
-        <FrameLayout
-            android:id="@+id/stickyHeaderOverlay"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_margin="12dp"
-            android:background="@drawable/bg_status_bar"
-            android:paddingStart="14dp"
-            android:paddingTop="6dp"
-            android:paddingEnd="14dp"
-            android:paddingBottom="6dp"
-            android:visibility="gone"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+        </LinearLayout>
 
-            <TextView
-                android:id="@+id/tvStickyHeaderTitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textColor="@color/text_primary"
-                android:textSize="13sp"
-                android:textStyle="bold" />
-        </FrameLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+        </LinearLayout>
 
-        <!-- Fast Scroller Track and Date Bubble -->
-        <RelativeLayout
-            android:id="@+id/layoutFastScroll"
-            android:layout_width="wrap_content"
-            android:layout_height="match_parent"
-            android:layout_alignParentEnd="true"
-            android:visibility="gone"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_margin="2dp" android:background="@drawable/bg_placeholder_tile" />
+        </LinearLayout>
+    </LinearLayout>
 
-            <TextView
-                android:id="@+id/tvFastScrollBubble"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_centerVertical="true"
-                android:layout_marginEnd="20dp"
-                android:background="@drawable/bg_status_bar"
-                android:elevation="6dp"
-                android:paddingStart="12dp"
-                android:paddingTop="6dp"
-                android:paddingEnd="12dp"
-                android:paddingBottom="6dp"
-                android:textColor="@color/primary_blue"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:visibility="gone" />
-
-            <View
-                android:id="@+id/viewFastScrollThumb"
-                android:layout_width="4dp"
-                android:layout_height="48dp"
-                android:layout_alignParentEnd="true"
-                android:layout_centerVertical="true"
-                android:layout_marginEnd="2dp"
-                android:background="@drawable/bg_fast_scroll_thumb" />
-        </RelativeLayout>
-    </androidx.constraintlayout.widget.ConstraintLayout>
-
-    <!-- Empty State for Timeline (Welcome / Permission explanation) -->
+    <!-- Empty State for Timeline -->
     <LinearLayout
         android:id="@+id/layoutTimelineEmpty"
         android:layout_width="match_parent"
@@ -394,7 +381,7 @@
         android:gravity="center"
         android:orientation="vertical"
         android:padding="32dp"
-        android:visibility="visible"
+        android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
