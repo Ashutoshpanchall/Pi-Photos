@@ -104,6 +104,14 @@ class PhotoViewerActivity : AppCompatActivity() {
         setupTopBarActions()
         setupBottomBarActions()
         setupBackNavigation()
+
+        lifecycleScope.launch {
+            LocalMediaIndex.getInstance(applicationContext).favoritesRepo.observeIds().collect { favIds ->
+                val item = mediaItems.getOrNull(currentPosition) ?: return@collect
+                isCurrentFavorite = favIds.contains(item.id)
+                updateFavoriteIcon(isCurrentFavorite)
+            }
+        }
     }
 
     private fun loadMediaList() {
@@ -202,11 +210,9 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding.tvViewerDate.text = dateFormat.format(dateObj)
         binding.tvViewerTime.text = timeFormat.format(dateObj)
 
-        lifecycleScope.launch {
-            val repo = LocalMediaIndex.getInstance(applicationContext).favoritesRepo
-            isCurrentFavorite = repo.isFavorite(item.id)
-            updateFavoriteIcon(isCurrentFavorite)
-        }
+        val favIds = LocalMediaIndex.getInstance(applicationContext).favoritesRepo.idsFlow.value
+        isCurrentFavorite = favIds.contains(item.id)
+        updateFavoriteIcon(isCurrentFavorite)
     }
 
     private fun updateFavoriteIcon(isFav: Boolean) {
@@ -233,9 +239,7 @@ class PhotoViewerActivity : AppCompatActivity() {
             val item = mediaItems.getOrNull(currentPosition) ?: return@setOnClickListener
             lifecycleScope.launch {
                 val repo = LocalMediaIndex.getInstance(applicationContext).favoritesRepo
-                val newState = repo.toggleFavorite(item.id)
-                isCurrentFavorite = newState
-                updateFavoriteIcon(newState)
+                repo.toggle(item.id)
             }
         }
 
@@ -314,11 +318,11 @@ class PhotoViewerActivity : AppCompatActivity() {
             }
         }
 
-        // Add to Album (hide if no-op)
+        // Add to Album
         binding.btnAddToAlbum.setOnClickListener {
             val item = mediaItems.getOrNull(currentPosition) ?: return@setOnClickListener
-            AddToAlbumBottomSheet { chosenAlbum ->
-                Toast.makeText(this, "Album feature configured in G3.1d", Toast.LENGTH_SHORT).show()
+            AddToAlbumBottomSheet(listOf(item.id)) { chosenAlbum ->
+                Toast.makeText(this, "Added to \"$chosenAlbum\"", Toast.LENGTH_SHORT).show()
             }.show(supportFragmentManager, AddToAlbumBottomSheet.TAG)
         }
 

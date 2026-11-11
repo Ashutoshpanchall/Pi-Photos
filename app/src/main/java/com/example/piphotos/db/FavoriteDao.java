@@ -8,19 +8,18 @@ import java.util.List;
 
 @Dao
 public interface FavoriteDao {
-    @Query("SELECT mediaId FROM favorites")
+    @Query("SELECT media_store_id FROM favorite")
     List<Long> getAllFavoriteIds();
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    void addFavorite(FavoriteRecord favorite);
+    void addFavorite(FavoriteEntity entity);
 
-    @Query("DELETE FROM favorites WHERE mediaId = :mediaId")
-    void removeFavorite(long mediaId);
+    @Query("DELETE FROM favorite WHERE media_store_id = :mediaStoreId")
+    void removeFavorite(long mediaStoreId);
 
-    @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE mediaId = :mediaId)")
-    boolean isFavorite(long mediaId);
+    @Query("SELECT EXISTS(SELECT 1 FROM favorite WHERE media_store_id = :mediaStoreId)")
+    boolean isFavorite(long mediaStoreId);
 
-    @Query("SELECT COUNT(*) FROM favorites")
+    @Query("SELECT COUNT(*) FROM favorite")
     int getFavoriteCount();
 }
-

@@ -51,6 +51,18 @@
             android:textStyle="bold" />
     </LinearLayout>
 
+    <!-- Favorite Heart Overlay -->
+    <ImageView
+        android:id="@+id/ivFavoriteBadge"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:layout_margin="6dp"
+        android:src="@drawable/ic_heart"
+        android:visibility="gone"
+        app:tint="@color/status_amber"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
     <!-- Selection Checkmark Circle Overlay -->
     <FrameLayout
         android:id="@+id/layoutCheckOverlay"

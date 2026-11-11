@@ -1,7 +1,7 @@
 package com.example.piphotos
 
 import com.example.piphotos.db.FavoriteDao
-import com.example.piphotos.db.FavoriteRecord
+import com.example.piphotos.db.FavoriteEntity
 import com.example.piphotos.db.FavoritesRepository
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -12,12 +12,12 @@ import org.junit.Test
 class PhaseG2FavoritesTest {
 
     private class TestFavoriteDao : FavoriteDao {
-        private val records = mutableMapOf<Long, FavoriteRecord>()
+        private val records = mutableMapOf<Long, FavoriteEntity>()
 
         override fun getAllFavoriteIds(): List<Long> = records.keys.toList()
 
-        override fun addFavorite(favorite: FavoriteRecord) {
-            records[favorite.mediaId] = favorite
+        override fun addFavorite(favorite: FavoriteEntity) {
+            records[favorite.mediaStoreId] = favorite
         }
 
         override fun removeFavorite(mediaId: Long) {

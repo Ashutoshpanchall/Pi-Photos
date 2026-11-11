@@ -40,6 +40,19 @@ class TimelineAdapter(
         }
 
     val selectedIds = mutableSetOf<Long>()
+    var favoriteIds: Set<Long> = emptySet()
+
+    fun updateFavorites(newFavIds: Set<Long>) {
+        if (favoriteIds == newFavIds) return
+        val changedIds = (favoriteIds - newFavIds) + (newFavIds - favoriteIds)
+        favoriteIds = newFavIds
+        for (id in changedIds) {
+            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
+            if (pos >= 0) {
+                notifyItemChanged(pos, PAYLOAD_FAVORITE)
+            }
+        }
+    }
 
     override fun getItemId(position: Int): Long {
         return getItem(position).stableId
@@ -78,9 +91,17 @@ class TimelineAdapter(
         position: Int,
         payloads: List<Any>
     ) {
-        if (payloads.contains(PAYLOAD_SELECTION) && holder is MediaViewHolder) {
+        if (holder is MediaViewHolder) {
             val row = getItem(position) as? TimelineRow.MediaRow ?: return
-            holder.updateSelection(row.item.id)
+            if (payloads.contains(PAYLOAD_SELECTION)) {
+                holder.updateSelection(row.item.id)
+            }
+            if (payloads.contains(PAYLOAD_FAVORITE)) {
+                holder.updateFavorite(row.item.id)
+            }
+            if (!payloads.contains(PAYLOAD_SELECTION) && !payloads.contains(PAYLOAD_FAVORITE)) {
+                super.onBindViewHolder(holder, position, payloads)
+            }
         } else {
             super.onBindViewHolder(holder, position, payloads)
         }
@@ -192,6 +213,11 @@ class TimelineAdapter(
 
             // Selection state
             updateSelection(item.id)
+            updateFavorite(item.id)
+        }
+
+        fun updateFavorite(itemId: Long) {
+            binding.ivFavoriteBadge.visibility = if (favoriteIds.contains(itemId)) View.VISIBLE else View.GONE
         }
 
         fun updateSelection(itemId: Long) {
@@ -213,6 +239,7 @@ class TimelineAdapter(
         const val VIEW_TYPE_HEADER = 0
         const val VIEW_TYPE_MEDIA = 1
         const val PAYLOAD_SELECTION = "PAYLOAD_SELECTION"
+        const val PAYLOAD_FAVORITE = "PAYLOAD_FAVORITE"
     }
 }
 

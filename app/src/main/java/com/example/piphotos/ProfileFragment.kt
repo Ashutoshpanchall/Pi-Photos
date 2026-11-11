@@ -121,7 +121,7 @@ class ProfileFragment : Fragment() {
 
     private fun renderUsersList() {
         val b = _binding ?: return
-        val isLocalOnly = MediaRepository.backupState is BackupState.LocalOnly
+        val isLocalOnly = BackupState.current is BackupState.LocalOnly
         if (isLocalOnly) {
             b.cardPersonalQuota.visibility = View.GONE
             b.layoutPeopleSection.visibility = View.GONE

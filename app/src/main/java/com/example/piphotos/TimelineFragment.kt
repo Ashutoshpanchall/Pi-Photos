@@ -255,7 +255,13 @@ class TimelineFragment : Fragment() {
     private fun observeMediaIndex() {
         val index = LocalMediaIndex.getInstance(requireContext())
         viewLifecycleOwner.lifecycleScope.launch {
-            cachedFavoriteIds = index.favoritesRepo.getAllFavoriteIds()
+            index.favoritesRepo.observeIds().collectLatest { favIds ->
+                cachedFavoriteIds = favIds
+                _binding?.timelineView?.updateFavorites(favIds)
+                updateUiWithCurrentState()
+            }
+        }
+        viewLifecycleOwner.lifecycleScope.launch {
             index.indexStateFlow.collectLatest {
                 updateUiWithCurrentState()
             }

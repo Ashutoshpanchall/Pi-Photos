@@ -14,3 +14,4 @@ object LocalDeletePolicyHook {
         // Documented contract hook: records local deletion intent without making remote calls.
     }
 }
+

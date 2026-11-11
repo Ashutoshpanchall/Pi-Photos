@@ -6,23 +6,27 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.piphotos.databinding.ActivityAlbumDetailBinding
-import com.example.piphotos.DeleteResult
-import com.example.piphotos.LocalDeleteHandler
+import com.example.piphotos.db.AlbumsRepository
 import com.example.piphotos.media.LocalMediaIndex
 import com.example.piphotos.media.LocalMediaItem
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class AlbumDetailActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAlbumDetailBinding
     private var currentCategory: String = "Recents"
+    private var albumId: Long = -1L
+    private var bucketId: Long = -1L
     private var currentItems: List<LocalMediaItem> = emptyList()
 
     private val intentSenderLauncher = registerForActivityResult(
@@ -56,10 +60,24 @@ class AlbumDetailActivity : AppCompatActivity() {
         )
 
         currentCategory = intent.getStringExtra(EXTRA_ALBUM_TITLE) ?: "Recents"
+        albumId = intent.getLongExtra(EXTRA_ALBUM_ID, -1L)
+        bucketId = intent.getLongExtra(EXTRA_BUCKET_ID, -1L)
         val subtitle = intent.getStringExtra(EXTRA_ALBUM_COUNT) ?: ""
 
         binding.tvAlbumDetailTitle.text = currentCategory
         binding.tvAlbumDetailCount.text = subtitle
+
+        if (albumId != -1L) {
+            binding.btnAlbumMenu.visibility = View.VISIBLE
+            binding.btnAlbumMenu.setOnClickListener {
+                showUserAlbumMenu()
+            }
+            binding.tvAlbumDetailTitle.setOnClickListener {
+                showRenameAlbumDialog()
+            }
+        } else {
+            binding.btnAlbumMenu.visibility = View.GONE
+        }
 
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -81,6 +99,7 @@ class AlbumDetailActivity : AppCompatActivity() {
 
         setupTimelineView()
         setupActions()
+        setupLiveObservers()
         loadData()
     }
 
@@ -115,13 +134,39 @@ class AlbumDetailActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupLiveObservers() {
+        val index = LocalMediaIndex.getInstance(this)
+
+        // Live favorite overlay updates
+        lifecycleScope.launch {
+            index.favoritesRepo.observeIds().collectLatest { favIds ->
+                binding.timelineView.updateFavorites(favIds)
+                if (currentCategory.equals("Favorites", ignoreCase = true)) {
+                    val all = index.getAllItems()
+                    val favItems = all.filter { favIds.contains(it.id) }
+                    displayItems(favItems)
+                }
+            }
+        }
+
+        // Live updates for custom user album
+        if (albumId != -1L) {
+            val albumsRepo = AlbumsRepository(this)
+            lifecycleScope.launch {
+                albumsRepo.getItemsForAlbum(albumId).collectLatest { items ->
+                    displayItems(items)
+                }
+            }
+        }
+    }
+
     private fun loadData() {
         val index = LocalMediaIndex.getInstance(this)
-        val bucketId = intent.getLongExtra(EXTRA_BUCKET_ID, -1L)
 
         lifecycleScope.launch {
             val isTrash = currentCategory.equals("Trash", ignoreCase = true)
             val localItems = when {
+                albumId != -1L -> AlbumsRepository(this@AlbumDetailActivity).getItemsForAlbumList(albumId)
                 isTrash -> {
                     val binItems = LocalDeleteHandler(this@AlbumDetailActivity).listBin()
                     binItems.map { b ->
@@ -148,22 +193,27 @@ class AlbumDetailActivity : AppCompatActivity() {
                 }
             }
 
-            currentItems = localItems
-            binding.timelineView.submitItems(localItems)
+            displayItems(localItems)
+        }
+    }
 
-            val unit = if (currentCategory.equals("Videos", ignoreCase = true)) "videos" else "items"
-            binding.tvAlbumDetailCount.text = "${localItems.size} $unit"
+    private fun displayItems(items: List<LocalMediaItem>) {
+        currentItems = items
+        binding.timelineView.submitItems(items)
 
-            binding.layoutTrashBanner.visibility = if (isTrash && localItems.isNotEmpty()) View.VISIBLE else View.GONE
-            binding.btnEmptyTrash.visibility = if (isTrash && localItems.isNotEmpty()) View.VISIBLE else View.GONE
-            binding.btnSelect.visibility = if (localItems.isEmpty()) View.GONE else View.VISIBLE
+        val unit = if (currentCategory.equals("Videos", ignoreCase = true)) "videos" else "items"
+        binding.tvAlbumDetailCount.text = "${items.size} $unit"
 
-            if (localItems.isEmpty()) {
-                showEmptyState()
-            } else {
-                binding.layoutEmptyState.visibility = View.GONE
-                binding.timelineView.visibility = View.VISIBLE
-            }
+        val isTrash = currentCategory.equals("Trash", ignoreCase = true)
+        binding.layoutTrashBanner.visibility = if (isTrash && items.isNotEmpty()) View.VISIBLE else View.GONE
+        binding.btnEmptyTrash.visibility = if (isTrash && items.isNotEmpty()) View.VISIBLE else View.GONE
+        binding.btnSelect.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+
+        if (items.isEmpty()) {
+            showEmptyState()
+        } else {
+            binding.layoutEmptyState.visibility = View.GONE
+            binding.timelineView.visibility = View.VISIBLE
         }
     }
 
@@ -173,10 +223,10 @@ class AlbumDetailActivity : AppCompatActivity() {
         binding.layoutSelectionBar.visibility = View.GONE
 
         when {
-            currentCategory.contains("Vault", ignoreCase = true) -> {
-                binding.ivEmptyIcon.setImageResource(R.drawable.ic_lock)
-                binding.tvEmptyTitle.text = "Encrypted Vault is Empty"
-                binding.tvEmptySubtitle.text = "Items added to Encrypted Vault are encrypted and isolated from your gallery."
+            albumId != -1L -> {
+                binding.ivEmptyIcon.setImageResource(R.drawable.ic_nav_albums)
+                binding.tvEmptyTitle.text = "This Album is Empty"
+                binding.tvEmptySubtitle.text = "Add photos to this album from your photo collection."
                 binding.btnEmptyAction.text = "Return to Albums"
                 binding.btnEmptyAction.setOnClickListener { finish() }
             }
@@ -203,12 +253,61 @@ class AlbumDetailActivity : AppCompatActivity() {
             }
             else -> {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_nav_albums)
-                binding.tvEmptyTitle.text = "This Album is Empty"
-                binding.tvEmptySubtitle.text = "Add photos to this album from your photo collection."
+                binding.tvEmptyTitle.text = "This Folder is Empty"
+                binding.tvEmptySubtitle.text = "No media found in this folder."
                 binding.btnEmptyAction.text = "Return to Albums"
                 binding.btnEmptyAction.setOnClickListener { finish() }
             }
         }
+    }
+
+    private fun showUserAlbumMenu() {
+        val options = arrayOf("Rename Album", "Delete Album")
+        AlertDialog.Builder(this)
+            .setTitle(currentCategory)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showRenameAlbumDialog()
+                    1 -> showDeleteAlbumDialog()
+                }
+            }
+            .show()
+    }
+
+    private fun showRenameAlbumDialog() {
+        val input = EditText(this).apply {
+            setText(currentCategory)
+            setSelection(currentCategory.length)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rename Album")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isNotEmpty() && newName != currentCategory) {
+                    lifecycleScope.launch {
+                        AlbumsRepository(this@AlbumDetailActivity).renameAlbum(albumId, newName)
+                        currentCategory = newName
+                        binding.tvAlbumDetailTitle.text = newName
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showDeleteAlbumDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Delete Album \"$currentCategory\"?")
+            .setMessage("Original photos will remain safe in your library. Only this album will be deleted.")
+            .setPositiveButton("Delete Album") { _, _ ->
+                lifecycleScope.launch {
+                    AlbumsRepository(this@AlbumDetailActivity).deleteAlbum(albumId)
+                    finish()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun setupActions() {
@@ -240,11 +339,10 @@ class AlbumDetailActivity : AppCompatActivity() {
             exitSelectionMode()
         }
 
-        // Hide fake download button if present (photos are already on device)
         binding.btnSelectionDownload.visibility = View.GONE
 
         binding.btnEmptyTrash.setOnClickListener {
-            androidx.appcompat.app.AlertDialog.Builder(this)
+            AlertDialog.Builder(this)
                 .setTitle("Empty Trash?")
                 .setMessage("All items in Trash will be permanently deleted.")
                 .setPositiveButton("Empty Trash") { _, _ ->
@@ -294,29 +392,56 @@ class AlbumDetailActivity : AppCompatActivity() {
         binding.btnSelectionDelete.setOnClickListener {
             val selected = binding.timelineView.selectedIds.toList()
             if (selected.isEmpty()) return@setOnClickListener
-            val isTrash = currentCategory.equals("Trash", ignoreCase = true)
 
-            lifecycleScope.launch {
-                val deleteHandler = LocalDeleteHandler(this@AlbumDetailActivity)
-                val result = if (isTrash) {
-                    deleteHandler.deletePermanently(selected)
-                } else {
-                    deleteHandler.trash(selected)
+            if (albumId != -1L) {
+                // In a user album, prompt whether to remove from album or move to trash
+                val options = arrayOf("Remove from Album", "Move to Trash")
+                AlertDialog.Builder(this)
+                    .setTitle("Selected Photos")
+                    .setItems(options) { _, which ->
+                        when (which) {
+                            0 -> {
+                                lifecycleScope.launch {
+                                    AlbumsRepository(this@AlbumDetailActivity).removePhotos(albumId, selected)
+                                    exitSelectionMode()
+                                    loadData()
+                                }
+                            }
+                            1 -> {
+                                performTrashOrDelete(selected)
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            } else {
+                performTrashOrDelete(selected)
+            }
+        }
+    }
+
+    private fun performTrashOrDelete(selected: List<Long>) {
+        val isTrash = currentCategory.equals("Trash", ignoreCase = true)
+        lifecycleScope.launch {
+            val deleteHandler = LocalDeleteHandler(this@AlbumDetailActivity)
+            val result = if (isTrash) {
+                deleteHandler.deletePermanently(selected)
+            } else {
+                deleteHandler.trash(selected)
+            }
+
+            when (result) {
+                is DeleteResult.Success -> {
+                    exitSelectionMode()
+                    LocalMediaIndex.getInstance(applicationContext).refreshDelta()
+                    loadData()
                 }
-
-                when (result) {
-                    is DeleteResult.Success -> {
-                        exitSelectionMode()
-                        LocalMediaIndex.getInstance(applicationContext).refreshDelta()
-                        loadData()
-                    }
-                    is DeleteResult.RequiresConfirmation -> {
-                        val request = IntentSenderRequest.Builder(result.intentSender).build()
-                        intentSenderLauncher.launch(request)
-                    }
-                    is DeleteResult.Error -> {
-                        Toast.makeText(this@AlbumDetailActivity, result.message, Toast.LENGTH_SHORT).show()
-                    }
+                is DeleteResult.RequiresConfirmation -> {
+                    val request = IntentSenderRequest.Builder(result.intentSender).build()
+                    intentSenderLauncher.launch(request)
+                }
+                is DeleteResult.Error -> {
+                    Toast.makeText(this@AlbumDetailActivity, result.message, Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -332,13 +457,23 @@ class AlbumDetailActivity : AppCompatActivity() {
         const val EXTRA_ALBUM_TITLE = "extra_album_title"
         const val EXTRA_ALBUM_COUNT = "extra_album_count"
         const val EXTRA_BUCKET_ID = "extra_bucket_id"
+        const val EXTRA_ALBUM_ID = "extra_album_id"
 
-        fun start(context: Context, title: String, count: String, bucketId: Long = -1L) {
+        fun start(
+            context: Context,
+            title: String,
+            count: String,
+            bucketId: Long = -1L,
+            albumId: Long = -1L
+        ) {
             val intent = Intent(context, AlbumDetailActivity::class.java).apply {
                 putExtra(EXTRA_ALBUM_TITLE, title)
                 putExtra(EXTRA_ALBUM_COUNT, count)
                 if (bucketId != -1L) {
                     putExtra(EXTRA_BUCKET_ID, bucketId)
+                }
+                if (albumId != -1L) {
+                    putExtra(EXTRA_ALBUM_ID, albumId)
                 }
             }
             context.startActivity(intent)

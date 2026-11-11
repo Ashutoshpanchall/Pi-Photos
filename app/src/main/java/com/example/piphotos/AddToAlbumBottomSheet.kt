@@ -12,11 +12,17 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.piphotos.databinding.BottomSheetAddToAlbumBinding
+import com.example.piphotos.db.AlbumsRepository
+import com.example.piphotos.db.RoomAlbum
+import com.example.piphotos.media.LocalMediaIndex
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import kotlinx.coroutines.launch
 
 class AddToAlbumBottomSheet(
-    private val onAlbumChosen: (albumName: String) -> Unit
+    private val itemIds: List<Long> = emptyList(),
+    private val onAlbumChosen: ((albumName: String) -> Unit)? = null
 ) : BottomSheetDialogFragment() {
 
     private var _binding: BottomSheetAddToAlbumBinding? = null
@@ -42,20 +48,44 @@ class AddToAlbumBottomSheet(
     }
 
     private fun populateAlbums() {
+        val ctx = context ?: return
         binding.layoutAlbumsList.removeAllViews()
-        val albums = MediaRepository.getCustomAlbums()
+        val repo = AlbumsRepository(ctx)
 
-        albums.forEach { albumName ->
-            val row = createAlbumRow(requireContext(), albumName) {
-                onAlbumChosen(albumName)
-                dismiss()
+        viewLifecycleOwner.lifecycleScope.launch {
+            val albums = repo.getAllAlbums()
+            if (albums.isEmpty()) {
+                val emptyTv = TextView(ctx).apply {
+                    text = "No custom albums yet. Create one above!"
+                    textSize = 14f
+                    setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
+                    val p = (16 * resources.displayMetrics.density).toInt()
+                    setPadding(p, p, p, p)
+                }
+                binding.layoutAlbumsList.addView(emptyTv)
+                return@launch
             }
-            binding.layoutAlbumsList.addView(row)
+            albums.forEach { album ->
+                val row = createAlbumRow(ctx, album) {
+                    if (itemIds.isNotEmpty()) {
+                        viewLifecycleOwner.lifecycleScope.launch {
+                            val index = LocalMediaIndex.getInstance(ctx)
+                            val itemsToAdd = itemIds.mapNotNull { index.getItem(it) }
+                            repo.addPhotos(album.id, itemsToAdd)
+                            onAlbumChosen?.invoke(album.name)
+                            dismiss()
+                        }
+                    } else {
+                        onAlbumChosen?.invoke(album.name)
+                        dismiss()
+                    }
+                }
+                binding.layoutAlbumsList.addView(row)
+            }
         }
     }
 
-    private fun createAlbumRow(context: Context, albumName: String, onClick: () -> Unit): View {
-        val count = MediaRepository.getMediaForCategory(albumName).size
+    private fun createAlbumRow(context: Context, album: RoomAlbum, onClick: () -> Unit): View {
         val row = LinearLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -86,14 +116,14 @@ class AddToAlbumBottomSheet(
         }
 
         val tvTitle = TextView(context).apply {
-            text = albumName
+            text = album.name
             textSize = 15f
             setTextColor(ContextCompat.getColor(context, R.color.text_primary))
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
 
         val tvSubtitle = TextView(context).apply {
-            text = "$count photos"
+            text = "${album.itemCount} items"
             textSize = 12f
             setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
         }
@@ -132,9 +162,11 @@ class AddToAlbumBottomSheet(
             .setPositiveButton("Create & Add") { _, _ ->
                 val name = input.text.toString().trim()
                 if (name.isNotEmpty()) {
-                    MediaRepository.addCustomAlbum(name)
-                    onAlbumChosen(name)
-                    dismiss()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        AlbumsRepository(requireContext()).createAlbum(name, itemIds)
+                        onAlbumChosen?.invoke(name)
+                        dismiss()
+                    }
                 } else {
                     Toast.makeText(requireContext(), "Album name cannot be empty", Toast.LENGTH_SHORT).show()
                 }
@@ -152,4 +184,3 @@ class AddToAlbumBottomSheet(
         const val TAG = "AddToAlbumBottomSheet"
     }
 }
-

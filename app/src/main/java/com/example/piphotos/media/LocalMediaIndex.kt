@@ -9,7 +9,6 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import com.example.piphotos.FolderItem
-import com.example.piphotos.MediaItem
 import com.example.piphotos.db.FavoritesRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -220,34 +219,6 @@ class LocalMediaIndex(private val appContext: Context) {
         }
         folders.sortByDescending { it.itemCount }
         return folders
-    }
-
-    fun toUiMediaItem(localItem: LocalMediaItem, isFav: Boolean = false): MediaItem {
-        val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-        val dateStr = dateFormat.format(Date(localItem.effectiveDateMs))
-        val durationFormatted = if (localItem.isVideo && localItem.durationMs > 0) {
-            val totalSec = localItem.durationMs / 1000
-            val min = totalSec / 60
-            val sec = totalSec % 60
-            String.format(Locale.US, "%d:%02d", min, sec)
-        } else null
-
-        return MediaItem(
-            id = localItem.id.toString(),
-            title = "${if (localItem.isVideo) "VID" else "IMG"}_${localItem.id}",
-            date = dateStr,
-            category = localItem.bucketName,
-            contentUri = localItem.contentUri.toString(),
-            isVideo = localItem.isVideo,
-            duration = durationFormatted,
-            dateTakenMs = localItem.effectiveDateMs,
-            bucketId = localItem.bucketId.toString(),
-            bucketName = localItem.bucketName,
-            mimeType = localItem.mimeType,
-            sizeBytes = localItem.sizeBytes,
-            durationMs = localItem.durationMs,
-            isFavorite = isFav
-        )
     }
 
     companion object {

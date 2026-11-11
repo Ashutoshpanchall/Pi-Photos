@@ -26,7 +26,7 @@ class BackupFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         // Bind BackupState (defaults to LocalOnly in Phase G1)
-        val isLocalOnly = MediaRepository.backupState is BackupState.LocalOnly
+        val isLocalOnly = BackupState.current is BackupState.LocalOnly
         binding.cardLocalOnly.visibility = if (isLocalOnly) View.VISIBLE else View.GONE
         binding.cardPiOptIn.visibility = if (isLocalOnly) View.VISIBLE else View.GONE
         binding.cardBackupProgress.visibility = if (isLocalOnly) View.GONE else View.VISIBLE

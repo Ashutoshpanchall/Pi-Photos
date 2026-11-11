@@ -3,7 +3,6 @@ package com.example.piphotos
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.text.InputType
 import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.View
@@ -18,7 +17,10 @@ import androidx.lifecycle.lifecycleScope
 import coil.load
 import com.example.piphotos.databinding.FragmentAlbumsBinding
 import com.example.piphotos.databinding.ItemAlbumCardBinding
+import com.example.piphotos.db.AlbumsRepository
+import com.example.piphotos.db.RoomAlbum
 import com.example.piphotos.media.LocalMediaIndex
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class AlbumsFragment : Fragment() {
@@ -37,6 +39,10 @@ class AlbumsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        // Hide Encrypted Vault row completely until dedicated Vault phase
+        binding.rowVault.visibility = View.GONE
+        binding.dividerVault.visibility = View.GONE
 
         // New Album Creator
         binding.btnNewAlbum.setOnClickListener {
@@ -68,99 +74,80 @@ class AlbumsFragment : Fragment() {
             }
         }
 
-        // Encrypted Vault (Protected with PIN Gate)
-        binding.rowVault.setOnClickListener {
-            showVaultUnlockDialog()
-        }
-
         // Create First Album button for empty state
         binding.btnCreateFirstAlbum.setOnClickListener {
             startActivity(Intent(requireContext(), AlbumCreatorActivity::class.java))
         }
 
+        // Live observations
+        val index = LocalMediaIndex.getInstance(requireContext())
+        val albumsRepo = AlbumsRepository(requireContext())
+
         viewLifecycleOwner.lifecycleScope.launch {
-            LocalMediaIndex.getInstance(requireContext()).mediaFlow.collect {
+            index.mediaFlow.collectLatest {
+                refreshCounts()
+            }
+        }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            index.favoritesRepo.observeIds().collectLatest {
+                refreshCounts()
+            }
+        }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            albumsRepo.observeAlbums().collectLatest {
                 refreshCounts()
             }
         }
     }
 
-    private fun showAlbumOptionsMenu(albumName: String) {
+    private fun showAlbumOptionsMenu(album: RoomAlbum) {
         val options = arrayOf(
             "Rename Album",
-            "Change Cover Photo",
-            "Share Album",
             "Delete Album"
         )
 
         AlertDialog.Builder(requireContext())
-            .setTitle(albumName)
+            .setTitle(album.name)
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> showRenameDialog(albumName)
-                    1 -> Toast.makeText(requireContext(), "Cover photo updated for \"$albumName\"", Toast.LENGTH_SHORT).show()
-                    2 -> {
-                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, "Album: $albumName")
-                        }
-                        startActivity(Intent.createChooser(shareIntent, "Share Album"))
-                    }
-                    3 -> showDeleteAlbumDialog(albumName)
+                    0 -> showRenameDialog(album)
+                    1 -> showDeleteAlbumDialog(album)
                 }
             }
             .show()
     }
 
-    private fun showRenameDialog(albumName: String) {
+    private fun showRenameDialog(album: RoomAlbum) {
         val input = EditText(requireContext()).apply {
-            setText(albumName)
-            setSelection(albumName.length)
+            setText(album.name)
+            setSelection(album.name.length)
         }
         AlertDialog.Builder(requireContext())
             .setTitle("Rename Album")
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
                 val newName = input.text.toString().trim()
-                if (newName.isNotEmpty() && newName != albumName) {
-                    MediaRepository.renameAlbum(albumName, newName)
-                    Toast.makeText(requireContext(), "Album renamed to \"$newName\"", Toast.LENGTH_SHORT).show()
-                    refreshCounts()
+                if (newName.isNotEmpty() && newName != album.name) {
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        AlbumsRepository(requireContext()).renameAlbum(album.id, newName)
+                        refreshCounts()
+                    }
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun showDeleteAlbumDialog(albumName: String) {
+    private fun showDeleteAlbumDialog(album: RoomAlbum) {
         AlertDialog.Builder(requireContext())
-            .setTitle("Delete Album \"$albumName\"?")
-            .setMessage("Original photos will remain safe in your library. Only this album folder will be removed.")
+            .setTitle("Delete Album \"${album.name}\"?")
+            .setMessage("Original photos will remain safe in your library. Only this album will be removed.")
             .setPositiveButton("Delete Album") { _, _ ->
-                MediaRepository.deleteAlbum(albumName, preserveMedia = true)
-                Toast.makeText(requireContext(), "Album \"$albumName\" removed", Toast.LENGTH_SHORT).show()
-                refreshCounts()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun showVaultUnlockDialog() {
-        val input = EditText(requireContext()).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            hint = "Enter 4-digit PIN"
-        }
-
-        AlertDialog.Builder(requireContext())
-            .setTitle("Unlock Vault")
-            .setMessage("Vault is encrypted. Enter your security PIN to access.")
-            .setView(input)
-            .setPositiveButton("Unlock") { _, _ ->
-                val pin = input.text.toString()
-                if (pin.length == 4) {
-                    AlbumDetailActivity.start(requireContext(), "Encrypted Vault", "0 items")
-                } else {
-                    Toast.makeText(requireContext(), "Incorrect PIN. Vault remains locked.", Toast.LENGTH_SHORT).show()
+                viewLifecycleOwner.lifecycleScope.launch {
+                    AlbumsRepository(requireContext()).deleteAlbum(album.id)
+                    refreshCounts()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -172,12 +159,11 @@ class AlbumsFragment : Fragment() {
         refreshCounts()
     }
 
-    private fun renderAlbums(folders: List<FolderItem>) {
+    private fun renderAlbums(folders: List<FolderItem>, customAlbums: List<RoomAlbum>) {
         val b = _binding ?: return
         val container = b.containerAlbumCards
         container.removeAllViews()
 
-        val customAlbums = MediaRepository.getCustomAlbums()
         if (folders.isEmpty() && customAlbums.isEmpty()) {
             b.layoutAlbumsEmptyState.visibility = View.VISIBLE
             container.visibility = View.GONE
@@ -188,6 +174,7 @@ class AlbumsFragment : Fragment() {
         container.visibility = View.VISIBLE
 
         val inflater = LayoutInflater.from(requireContext())
+        val index = LocalMediaIndex.getInstance(requireContext())
 
         // Render device folders
         val folderPairs = folders.chunked(2)
@@ -244,7 +231,7 @@ class AlbumsFragment : Fragment() {
             container.addView(row)
         }
 
-        // Render custom albums if any
+        // Render custom Room albums
         if (customAlbums.isNotEmpty()) {
             val customPairs = customAlbums.chunked(2)
             for (pair in customPairs) {
@@ -259,26 +246,36 @@ class AlbumsFragment : Fragment() {
                     setPadding(dpToPx(16), 0, dpToPx(16), 0)
                 }
 
-                for (albumName in pair) {
+                for (album in pair) {
                     val cardBinding = ItemAlbumCardBinding.inflate(inflater, row, false)
-                    val items = MediaRepository.getMediaForCategory(albumName)
-                    val coverRes = items.firstOrNull()?.drawableRes ?: 0
+                    val coverItem = if (album.coverMediaStoreId != null) index.getItem(album.coverMediaStoreId) else null
 
-                    if (coverRes != 0) {
-                        cardBinding.ivAlbumCover.setImageResource(coverRes)
+                    if (coverItem != null) {
+                        cardBinding.ivAlbumCover.scaleType = ImageView.ScaleType.CENTER_CROP
+                        cardBinding.ivAlbumCover.load(coverItem.contentUri) {
+                            crossfade(true)
+                            error(R.drawable.ic_nav_albums)
+                            fallback(R.drawable.ic_nav_albums)
+                        }
                     } else {
-                        cardBinding.ivAlbumCover.setImageResource(R.drawable.ic_nav_folders)
+                        cardBinding.ivAlbumCover.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                        cardBinding.ivAlbumCover.setImageResource(R.drawable.ic_nav_albums)
                     }
-                    cardBinding.tvAlbumTitle.text = albumName
-                    cardBinding.tvAlbumCount.text = "${items.size} photos"
+                    cardBinding.tvAlbumTitle.text = album.name
+                    cardBinding.tvAlbumCount.text = "${album.itemCount} items"
 
                     cardBinding.albumCardRoot.setOnClickListener {
-                        AlbumDetailActivity.start(requireContext(), albumName, "${items.size} photos")
+                        AlbumDetailActivity.start(
+                            context = requireContext(),
+                            title = album.name,
+                            count = "${album.itemCount} items",
+                            albumId = album.id
+                        )
                     }
 
                     cardBinding.albumCardRoot.setOnLongClickListener {
                         it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        showAlbumOptionsMenu(albumName)
+                        showAlbumOptionsMenu(album)
                         true
                     }
 
@@ -306,20 +303,22 @@ class AlbumsFragment : Fragment() {
     private fun refreshCounts() {
         val ctx = context ?: return
         val index = LocalMediaIndex.getInstance(ctx)
+        val albumsRepo = AlbumsRepository(ctx)
+
         viewLifecycleOwner.lifecycleScope.launch {
             val allItems = index.getAllItems()
             val favCount = index.favoritesRepo.getAllFavoriteIds().size
             val videoCount = allItems.count { it.isVideo }
             val folders = index.getFolderList()
             val trashCount = LocalDeleteHandler(ctx).getBinCount()
+            val customAlbums = albumsRepo.getAllAlbums()
 
             _binding?.let { b ->
                 b.tvRecentsCount.text = "${allItems.size}"
                 b.tvFavoritesCount.text = "$favCount"
                 b.tvVideosCount.text = "$videoCount"
                 b.tvTrashCount.text = "$trashCount"
-                b.tvVaultCount.text = "0"
-                renderAlbums(folders)
+                renderAlbums(folders, customAlbums)
             }
         }
     }

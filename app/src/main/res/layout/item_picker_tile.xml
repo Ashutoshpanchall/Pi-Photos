@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="110dp"
+    android:layout_margin="2dp">
+
+    <ImageView
+        android:id="@+id/ivPickerPhoto"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:background="@color/surface_card" />
+
+    <ImageView
+        android:id="@+id/ivPickerCheck"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_gravity="top|end"
+        android:layout_margin="6dp"
+        android:background="@drawable/bg_selection_circle_selected"
+        android:src="@drawable/ic_check"
+        android:padding="4dp"
+        android:tint="@color/white"
+        android:visibility="gone" />
+</FrameLayout>

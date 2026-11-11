@@ -102,6 +102,17 @@
                     android:textColor="@color/primary_blue"
                     android:textSize="14sp"
                     android:textStyle="bold" />
+
+                <ImageView
+                    android:id="@+id/btnAlbumMenu"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_gravity="center_vertical"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:padding="6dp"
+                    android:src="@drawable/ic_more_vert"
+                    android:visibility="gone"
+                    app:tint="@color/text_primary" />
             </LinearLayout>
         </RelativeLayout>
     </LinearLayout>
