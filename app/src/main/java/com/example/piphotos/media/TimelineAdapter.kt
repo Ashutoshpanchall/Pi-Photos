@@ -26,17 +26,12 @@ class TimelineAdapter(
         set(value) {
             if (field == value) return
             field = value
-            if (!value) {
-                val previouslySelected = selectedIds.toSet()
-                selectedIds.clear()
-                onSelectionChanged(emptySet())
-                for (id in previouslySelected) {
-                    val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-                    if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
-                }
-            } else {
-                notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
-            }
+            if (!value) selectedIds.clear()
+            // While selection mode is on, EVERY visible tile shows a check circle (filled or empty).
+            // So when the mode flips either way, ALL rows must be refreshed, not only the selected
+            // ones. Refreshing only the selected rows left empty circles on every other tile.
+            if (itemCount > 0) notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
+            onSelectionChanged(selectedIds.toSet())
         }
 
     val selectedIds = mutableSetOf<Long>()
@@ -108,43 +103,40 @@ class TimelineAdapter(
     }
 
     fun toggleSelection(id: Long) {
-        if (selectedIds.contains(id)) {
-            selectedIds.remove(id)
-            if (selectedIds.isEmpty()) {
-                isSelectionMode = false
-                return
-            }
-        } else {
-            selectedIds.add(id)
+        if (!selectedIds.remove(id)) selectedIds.add(id)
+
+        if (selectedIds.isEmpty()) {
+            // Last item deselected: leave selection mode. The setter refreshes EVERY row,
+            // including the one just deselected, so no check circles remain anywhere.
+            isSelectionMode = false
+            return
         }
+
         val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-        if (pos >= 0) {
-            notifyItemChanged(pos, PAYLOAD_SELECTION)
-        }
+        if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
         onSelectionChanged(selectedIds.toSet())
     }
 
     fun selectAll() {
         val allIds = currentList.mapNotNull { (it as? TimelineRow.MediaRow)?.item?.id }
-        val toUpdate = (allIds.toSet() - selectedIds)
+        if (allIds.isEmpty()) return
         selectedIds.clear()
         selectedIds.addAll(allIds)
-        for (id in toUpdate) {
-            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-            if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+        if (!isSelectionMode) {
+            isSelectionMode = true // setter refreshes all rows and reports the selection
+        } else {
+            notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
+            onSelectionChanged(selectedIds.toSet())
         }
-        onSelectionChanged(selectedIds.toSet())
     }
 
     fun clearSelection() {
-        val previouslySelected = selectedIds.toSet()
         selectedIds.clear()
-        isSelectionMode = false
-        for (id in previouslySelected) {
-            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-            if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+        if (isSelectionMode) {
+            isSelectionMode = false // setter refreshes ALL rows and reports an empty selection
+        } else {
+            onSelectionChanged(emptySet())
         }
-        onSelectionChanged(emptySet())
     }
 
     inner class HeaderViewHolder(private val binding: ItemTimelineHeaderBinding) :

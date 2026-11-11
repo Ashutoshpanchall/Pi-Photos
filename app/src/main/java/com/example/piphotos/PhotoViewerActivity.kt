@@ -45,6 +45,10 @@ class PhotoViewerActivity : AppCompatActivity() {
     private var sessionId: String? = null
     private var isCurrentFavorite: Boolean = false
 
+    // Zoom state of the VISIBLE page only. Off-screen pages that are being bound or recycled
+    // must never change it (they used to re-enable paging while the visible page was zoomed).
+    private var currentPageZoomed: Boolean = false
+
     private var exoPlayer: ExoPlayer? = null
 
     private val intentSenderLauncher = registerForActivityResult(
@@ -138,8 +142,13 @@ class PhotoViewerActivity : AppCompatActivity() {
         adapter = PhotoPagerAdapter(
             items = mediaItems,
             onSingleTap = { toggleToolbarsVisibility() },
-            onZoomStateChanged = { isZoomed ->
-                binding.viewPager.isUserInputEnabled = !isZoomed
+            onZoomStateChanged = { position, isZoomed ->
+                if (position == binding.viewPager.currentItem) {
+                    currentPageZoomed = isZoomed
+                }
+                // NOTE: paging is NOT disabled while zoomed. The zoom view locks the parents while
+                // it is panning and releases them at the image edge, so a drag at the edge swipes
+                // to the next photo like Google Photos.
             }
         )
 
@@ -150,6 +159,9 @@ class PhotoViewerActivity : AppCompatActivity() {
         binding.viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
                 currentPosition = position
+                // Leaving a page resets its zoom, so the page we land on is always fully zoomed out.
+                adapter.resetZoomExcept(position)
+                currentPageZoomed = false
                 attachActivePlayerToCurrentPage()
                 updateHeaderAndFavoriteState()
             }
@@ -183,9 +195,7 @@ class PhotoViewerActivity : AppCompatActivity() {
     }
 
     private fun setupSwipeDismiss() {
-        binding.swipeDismissContainer.isZoomedSupplier = {
-            adapter.isPositionZoomed(binding.viewPager.currentItem)
-        }
+        binding.swipeDismissContainer.isZoomedSupplier = { currentPageZoomed }
 
         binding.swipeDismissContainer.onDismissListener = {
             closeViewerInstant()
