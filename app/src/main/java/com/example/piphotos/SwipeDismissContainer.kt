@@ -36,6 +36,10 @@ class SwipeDismissContainer @JvmOverloads constructor(
     private var currentAnimator: ValueAnimator? = null
     private var isDismissing = false
 
+    // True once a second finger lands in the current gesture (a pinch). Swipe-to-dismiss must
+    // never start in that case, otherwise it steals the pinch from the image view.
+    private var sawMultiTouch = false
+
     var isZoomedSupplier: (() -> Boolean)? = null
     var onDismissListener: (() -> Unit)? = null
     var onDragProgressChanged: ((progress: Float) -> Unit)? = null
@@ -50,6 +54,7 @@ class SwipeDismissContainer @JvmOverloads constructor(
 
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                sawMultiTouch = false
                 downX = ev.rawX
                 downY = ev.rawY
                 isDragging = false
@@ -58,7 +63,14 @@ class SwipeDismissContainer @JvmOverloads constructor(
                 velocityTracker = VelocityTracker.obtain()
                 velocityTracker?.addMovement(ev)
             }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                sawMultiTouch = true
+            }
             MotionEvent.ACTION_MOVE -> {
+                if (sawMultiTouch || ev.pointerCount > 1) {
+                    sawMultiTouch = true
+                    return false
+                }
                 velocityTracker?.addMovement(ev)
                 val dx = ev.rawX - downX
                 val dy = ev.rawY - downY

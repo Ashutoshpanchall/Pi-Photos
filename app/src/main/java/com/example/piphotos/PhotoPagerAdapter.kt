@@ -14,13 +14,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.size.Scale
 import com.example.piphotos.media.LocalMediaItem
 import java.util.Locale
 
 class PhotoPagerAdapter(
     private var items: List<LocalMediaItem>,
     private val onSingleTap: () -> Unit,
-    private val onZoomStateChanged: (isZoomed: Boolean) -> Unit
+    private val onZoomStateChanged: (position: Int, isZoomed: Boolean) -> Unit
 ) : RecyclerView.Adapter<PhotoPagerAdapter.PhotoViewHolder>() {
 
     private val attachedHolders = mutableMapOf<Int, PhotoViewHolder>()
@@ -35,6 +36,13 @@ class PhotoPagerAdapter(
 
     fun getItemAt(position: Int): LocalMediaItem? {
         return items.getOrNull(position)
+    }
+
+    /** Zoom every page except [position] back to fit-center (called when the pager settles). */
+    fun resetZoomExcept(position: Int) {
+        attachedHolders.values.forEach { holder ->
+            if (holder.bindingAdapterPosition != position) holder.resetZoom()
+        }
     }
 
     fun isPositionZoomed(position: Int): Boolean {
@@ -105,7 +113,7 @@ class PhotoPagerAdapter(
     class PhotoViewHolder(
         itemView: View,
         private val onSingleTap: () -> Unit,
-        private val onZoomStateChanged: (isZoomed: Boolean) -> Unit
+        private val onZoomStateChanged: (position: Int, isZoomed: Boolean) -> Unit
     ) : RecyclerView.ViewHolder(itemView) {
         private val zoomImageView: ZoomableImageView = itemView.findViewById(R.id.zoomImageView)
         private val playerView: PlayerView = itemView.findViewById(R.id.playerView)
@@ -167,7 +175,12 @@ class PhotoPagerAdapter(
 
         init {
             zoomImageView.onSingleTapListener = { onSingleTap() }
-            zoomImageView.onZoomStateChanged = { zoomed -> onZoomStateChanged(zoomed) }
+            // Report WHICH page changed so the activity can ignore off-screen pages that are only
+            // being bound / recycled (they must not unlock or lock the visible page).
+            zoomImageView.onZoomStateChanged = { zoomed ->
+                val pos = bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) onZoomStateChanged(pos, zoomed)
+            }
 
             btnCenterPlayPause.setOnClickListener {
                 val player = boundPlayer ?: return@setOnClickListener
@@ -227,11 +240,16 @@ class PhotoPagerAdapter(
                 videoOverlayContainer.visibility = View.GONE
                 zoomImageView.visibility = View.VISIBLE
 
-                // Load with Coil at display size to avoid allocating 48MP raw bitmap
+                // Drop the previous photo first: a recycled holder still holds the last image, and
+                // its size must never be used to place the new one.
+                zoomImageView.setImageDrawable(null)
+
+                // Decode at most 2048px on the long side (never the raw 48MP bitmap). No crossfade
+                // and no placeholder: the zoom view recomputes the fit-center matrix every time the
+                // drawable changes, so the whole image is visible as soon as it arrives.
                 zoomImageView.load(item.contentUri) {
-                    crossfade(true)
-                    size(1080, 1920)
-                    placeholder(R.color.black)
+                    size(2048, 2048)
+                    scale(Scale.FIT)
                     error(R.color.surface_card)
                 }
             }
