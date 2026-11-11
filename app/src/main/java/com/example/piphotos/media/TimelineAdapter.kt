@@ -22,24 +22,18 @@ class TimelineAdapter(
         setHasStableIds(true)
     }
 
-    var isSelectionMode: Boolean = false
+    private val selectionState = SelectionState()
+
+    var isSelectionMode: Boolean
+        get() = selectionState.isSelectionMode
         set(value) {
-            if (field == value) return
-            field = value
-            if (!value) {
-                val previouslySelected = selectedIds.toSet()
-                selectedIds.clear()
-                onSelectionChanged(emptySet())
-                for (id in previouslySelected) {
-                    val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-                    if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
-                }
-            } else {
-                notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
-            }
+            if (selectionState.isSelectionMode == value) return
+            selectionState.setSelectionMode(value)
+            if (itemCount > 0) notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
+            onSelectionChanged(selectionState.selectedIds)
         }
 
-    val selectedIds = mutableSetOf<Long>()
+    val selectedIds: Set<Long> get() = selectionState.selectedIds
     var favoriteIds: Set<Long> = emptySet()
 
     fun updateFavorites(newFavIds: Set<Long>) {
@@ -108,43 +102,38 @@ class TimelineAdapter(
     }
 
     fun toggleSelection(id: Long) {
-        if (selectedIds.contains(id)) {
-            selectedIds.remove(id)
-            if (selectedIds.isEmpty()) {
-                isSelectionMode = false
-                return
+        when (val result = selectionState.toggle(id)) {
+            is SelectionState.Result.SingleItemToggled -> {
+                val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
+                if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+                onSelectionChanged(selectionState.selectedIds)
             }
-        } else {
-            selectedIds.add(id)
+            is SelectionState.Result.SelectionExited -> {
+                if (itemCount > 0) notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
+                onSelectionChanged(emptySet())
+            }
+            is SelectionState.Result.AllSelected -> {
+                if (itemCount > 0) notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
+                onSelectionChanged(selectionState.selectedIds)
+            }
         }
-        val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-        if (pos >= 0) {
-            notifyItemChanged(pos, PAYLOAD_SELECTION)
-        }
-        onSelectionChanged(selectedIds.toSet())
     }
 
     fun selectAll() {
         val allIds = currentList.mapNotNull { (it as? TimelineRow.MediaRow)?.item?.id }
-        val toUpdate = (allIds.toSet() - selectedIds)
-        selectedIds.clear()
-        selectedIds.addAll(allIds)
-        for (id in toUpdate) {
-            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-            if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
-        }
-        onSelectionChanged(selectedIds.toSet())
+        if (allIds.isEmpty()) return
+        selectionState.selectAll(allIds)
+        if (itemCount > 0) notifyItemRangeChanged(0, itemCount, PAYLOAD_SELECTION)
+        onSelectionChanged(selectionState.selectedIds)
     }
 
     fun clearSelection() {
-        val previouslySelected = selectedIds.toSet()
-        selectedIds.clear()
-        isSelectionMode = false
-        for (id in previouslySelected) {
-            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-            if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+        if (isSelectionMode) {
+            isSelectionMode = false
+        } else {
+            selectionState.clear()
+            onSelectionChanged(emptySet())
         }
-        onSelectionChanged(emptySet())
     }
 
     inner class HeaderViewHolder(private val binding: ItemTimelineHeaderBinding) :
