@@ -6,12 +6,10 @@ import com.example.piphotos.media.LocalMediaIndex
 object MediaRepository {
 
     private var source: MediaSource = DeviceMediaSource()
-    private var deleteHandler: DeleteHandler = LocalDeleteHandler(source)
     var backupState: BackupState = BackupState.LocalOnly
 
-    fun setSource(newSource: MediaSource, newDeleteHandler: DeleteHandler = LocalDeleteHandler(newSource)) {
+    fun setSource(newSource: MediaSource) {
         source = newSource
-        deleteHandler = newDeleteHandler
     }
 
     fun getSource(): MediaSource = source
@@ -49,19 +47,24 @@ object MediaRepository {
         return favRepo.isFavorite(id)
     }
 
-    suspend fun trash(ids: List<Long>): DeleteResult {
-        return deleteHandler.trash(ids)
-    }
-
     fun moveToTrash(id: String) {
-        deleteHandler.moveToTrash(id)
+        val item = source.getItem(id) ?: return
+        item.isTrash = true
     }
 
     fun restoreFromTrash(id: String) {
-        deleteHandler.restoreFromTrash(id)
+        val item = source.getItem(id) ?: return
+        item.isTrash = false
     }
 
-    fun deletePermanently(id: String): Boolean = deleteHandler.deletePermanently(id)
+    fun deletePermanently(id: String): Boolean {
+        val item = source.getItem(id) ?: return false
+        return true
+    }
 
-    fun emptyTrash(): Int = deleteHandler.emptyTrash()
+    fun emptyTrash(): Int {
+        val trashed = source.getMediaForCategory("trash")
+        trashed.forEach { it.isTrash = false }
+        return trashed.size
+    }
 }

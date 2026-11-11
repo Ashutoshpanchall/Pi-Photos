@@ -8,10 +8,21 @@ sealed class DeleteResult {
     data class Error(val message: String) : DeleteResult()
 }
 
+data class TrashedMediaItem(
+    val id: Long,
+    val isVideo: Boolean,
+    val mimeType: String,
+    val dateModifiedSec: Long,
+    val dateExpiresSec: Long,
+    val daysRemaining: Int,
+    val sizeBytes: Long
+)
+
 interface DeleteHandler {
     suspend fun trash(ids: List<Long>): DeleteResult
-    fun moveToTrash(id: String): Boolean
-    fun restoreFromTrash(id: String): Boolean
-    fun deletePermanently(id: String): Boolean
-    fun emptyTrash(): Int
+    suspend fun restore(ids: List<Long>): DeleteResult
+    suspend fun deletePermanently(ids: List<Long>): DeleteResult
+    suspend fun listBin(): List<TrashedMediaItem>
+    suspend fun getBinCount(): Int
+    suspend fun emptyBin(): DeleteResult
 }

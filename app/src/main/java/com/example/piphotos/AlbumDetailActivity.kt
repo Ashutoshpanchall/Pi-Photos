@@ -120,12 +120,28 @@ class AlbumDetailActivity : AppCompatActivity() {
         val bucketId = intent.getLongExtra(EXTRA_BUCKET_ID, -1L)
 
         lifecycleScope.launch {
+            val isTrash = currentCategory.equals("Trash", ignoreCase = true)
             val localItems = when {
+                isTrash -> {
+                    val binItems = LocalDeleteHandler(this@AlbumDetailActivity).listBin()
+                    binItems.map { b ->
+                        LocalMediaItem(
+                            id = b.id,
+                            isVideo = b.isVideo,
+                            mimeType = b.mimeType,
+                            dateTakenMs = b.dateModifiedSec * 1000L,
+                            dateAddedSec = b.dateModifiedSec,
+                            dateModifiedSec = b.dateModifiedSec,
+                            bucketId = -100L,
+                            bucketName = "${b.daysRemaining} days left",
+                            sizeBytes = b.sizeBytes
+                        )
+                    }
+                }
                 bucketId != -1L -> index.getItemsForFolder(bucketId)
                 currentCategory.equals("Favorites", ignoreCase = true) -> index.getFavoriteItems()
                 currentCategory.equals("Videos", ignoreCase = true) -> index.getVideoItems()
                 currentCategory.equals("Recents", ignoreCase = true) -> index.getAllItems()
-                currentCategory.equals("Trash", ignoreCase = true) -> emptyList()
                 else -> {
                     val folderMatches = index.getItemsForFolderName(currentCategory)
                     if (folderMatches.isNotEmpty()) folderMatches else emptyList()
@@ -135,10 +151,9 @@ class AlbumDetailActivity : AppCompatActivity() {
             currentItems = localItems
             binding.timelineView.submitItems(localItems)
 
-            val unit = if (currentCategory.equals("Videos", ignoreCase = true)) "videos" else "photos"
+            val unit = if (currentCategory.equals("Videos", ignoreCase = true)) "videos" else "items"
             binding.tvAlbumDetailCount.text = "${localItems.size} $unit"
 
-            val isTrash = currentCategory.equals("Trash", ignoreCase = true)
             binding.layoutTrashBanner.visibility = if (isTrash && localItems.isNotEmpty()) View.VISIBLE else View.GONE
             binding.btnEmptyTrash.visibility = if (isTrash && localItems.isNotEmpty()) View.VISIBLE else View.GONE
             binding.btnSelect.visibility = if (localItems.isEmpty()) View.GONE else View.VISIBLE
@@ -228,13 +243,68 @@ class AlbumDetailActivity : AppCompatActivity() {
         // Hide fake download button if present (photos are already on device)
         binding.btnSelectionDownload.visibility = View.GONE
 
-        binding.btnSelectionDelete.setOnClickListener {
+        binding.btnEmptyTrash.setOnClickListener {
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Empty Trash?")
+                .setMessage("All items in Trash will be permanently deleted.")
+                .setPositiveButton("Empty Trash") { _, _ ->
+                    lifecycleScope.launch {
+                        val deleteHandler = LocalDeleteHandler(this@AlbumDetailActivity)
+                        when (val res = deleteHandler.emptyBin()) {
+                            is DeleteResult.Success -> {
+                                loadData()
+                            }
+                            is DeleteResult.RequiresConfirmation -> {
+                                val request = IntentSenderRequest.Builder(res.intentSender).build()
+                                intentSenderLauncher.launch(request)
+                            }
+                            is DeleteResult.Error -> {
+                                Toast.makeText(this@AlbumDetailActivity, res.message, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+
+        binding.btnSelectionRestore.setOnClickListener {
             val selected = binding.timelineView.selectedIds.toList()
             if (selected.isEmpty()) return@setOnClickListener
 
             lifecycleScope.launch {
                 val deleteHandler = LocalDeleteHandler(this@AlbumDetailActivity)
-                when (val result = deleteHandler.trash(selected)) {
+                when (val res = deleteHandler.restore(selected)) {
+                    is DeleteResult.Success -> {
+                        exitSelectionMode()
+                        LocalMediaIndex.getInstance(applicationContext).refreshDelta()
+                        loadData()
+                    }
+                    is DeleteResult.RequiresConfirmation -> {
+                        val request = IntentSenderRequest.Builder(res.intentSender).build()
+                        intentSenderLauncher.launch(request)
+                    }
+                    is DeleteResult.Error -> {
+                        Toast.makeText(this@AlbumDetailActivity, res.message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+
+        binding.btnSelectionDelete.setOnClickListener {
+            val selected = binding.timelineView.selectedIds.toList()
+            if (selected.isEmpty()) return@setOnClickListener
+            val isTrash = currentCategory.equals("Trash", ignoreCase = true)
+
+            lifecycleScope.launch {
+                val deleteHandler = LocalDeleteHandler(this@AlbumDetailActivity)
+                val result = if (isTrash) {
+                    deleteHandler.deletePermanently(selected)
+                } else {
+                    deleteHandler.trash(selected)
+                }
+
+                when (result) {
                     is DeleteResult.Success -> {
                         exitSelectionMode()
                         LocalMediaIndex.getInstance(applicationContext).refreshDelta()

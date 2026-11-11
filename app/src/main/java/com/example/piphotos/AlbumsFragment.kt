@@ -62,7 +62,10 @@ class AlbumsFragment : Fragment() {
         }
 
         binding.rowTrash.setOnClickListener {
-            AlbumDetailActivity.start(requireContext(), "Trash", "0 items")
+            viewLifecycleOwner.lifecycleScope.launch {
+                val binCount = LocalDeleteHandler(requireContext()).getBinCount()
+                AlbumDetailActivity.start(requireContext(), "Trash", "$binCount items")
+            }
         }
 
         // Encrypted Vault (Protected with PIN Gate)
@@ -308,12 +311,13 @@ class AlbumsFragment : Fragment() {
             val favCount = index.favoritesRepo.getAllFavoriteIds().size
             val videoCount = allItems.count { it.isVideo }
             val folders = index.getFolderList()
+            val trashCount = LocalDeleteHandler(ctx).getBinCount()
 
             _binding?.let { b ->
                 b.tvRecentsCount.text = "${allItems.size}"
                 b.tvFavoritesCount.text = "$favCount"
                 b.tvVideosCount.text = "$videoCount"
-                b.tvTrashCount.text = "0"
+                b.tvTrashCount.text = "$trashCount"
                 b.tvVaultCount.text = "0"
                 renderAlbums(folders)
             }
