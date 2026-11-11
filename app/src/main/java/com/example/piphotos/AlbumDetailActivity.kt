@@ -93,13 +93,8 @@ class AlbumDetailActivity : AppCompatActivity() {
         binding.timelineView.onItemClick = { item ->
             PhotoViewerActivity.start(
                 context = this,
-                photoId = item.id.toString(),
-                drawableRes = 0,
-                title = "${if (item.isVideo) "VID" else "IMG"}_${item.id}",
-                date = "",
-                category = currentCategory,
-                isVideo = item.isVideo,
-                contentUri = item.contentUri.toString()
+                startingId = item.id,
+                items = currentItems
             )
         }
 

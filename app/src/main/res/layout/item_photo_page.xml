@@ -2,12 +2,21 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/black">
 
     <com.example.piphotos.ZoomableImageView
         android:id="@+id/zoomImageView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/playerView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        app:use_controller="false"
+        app:resize_mode="fit" />
 
     <!-- Video Overlay Elements: Only visible when item is a video -->
     <androidx.constraintlayout.widget.ConstraintLayout
@@ -44,7 +53,7 @@
                 android:id="@+id/tvDurationBadge"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="0:42"
+                android:text="0:00"
                 android:textColor="@color/white"
                 android:textSize="12sp"
                 android:textStyle="bold" />
@@ -95,7 +104,7 @@
                 android:id="@+id/videoSeekBar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="42"
+                android:max="100"
                 android:progress="0"
                 android:progressTint="@color/primary_blue"
                 android:thumbTint="@color/primary_blue" />
@@ -120,7 +129,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_centerInParent="true"
-                    android:text="1080p 60fps"
+                    android:text="Video"
                     android:textColor="#B3FFFFFF"
                     android:textSize="11sp" />
 
@@ -129,7 +138,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_alignParentEnd="true"
-                    android:text="0:42"
+                    android:text="0:00"
                     android:textColor="@color/white"
                     android:textSize="12sp"
                     android:textStyle="bold" />

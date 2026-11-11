@@ -9,23 +9,31 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import com.example.piphotos.media.LocalMediaItem
+import java.util.Locale
 
 class PhotoPagerAdapter(
-    private var items: List<MediaItem>,
-    private val onSingleTap: () -> Unit
+    private var items: List<LocalMediaItem>,
+    private val onSingleTap: () -> Unit,
+    private val onZoomStateChanged: (isZoomed: Boolean) -> Unit
 ) : RecyclerView.Adapter<PhotoPagerAdapter.PhotoViewHolder>() {
 
     private val attachedHolders = mutableMapOf<Int, PhotoViewHolder>()
     private var areControlsVisible: Boolean = true
+    private var activePlayer: ExoPlayer? = null
+    private var activePlayerPosition: Int = -1
 
-    fun updateItems(newItems: List<MediaItem>) {
+    fun updateItems(newItems: List<LocalMediaItem>) {
         items = newItems
         notifyDataSetChanged()
     }
 
-    fun getItemAt(position: Int): MediaItem? {
+    fun getItemAt(position: Int): LocalMediaItem? {
         return items.getOrNull(position)
     }
 
@@ -33,43 +41,74 @@ class PhotoPagerAdapter(
         return attachedHolders[position]?.isZoomed() == true
     }
 
-    fun pauseAllVideos() {
-        attachedHolders.values.forEach { it.pauseVideo() }
-    }
-
     fun setControlsVisibility(visible: Boolean) {
         areControlsVisible = visible
         attachedHolders.values.forEach { it.setOverlayControlsVisible(visible) }
+    }
+
+    fun attachPlayerToPosition(player: ExoPlayer?, position: Int) {
+        activePlayer = player
+        activePlayerPosition = position
+        attachedHolders.forEach { (pos, holder) ->
+            if (pos == position) {
+                holder.bindPlayer(player)
+            } else {
+                holder.unbindPlayer()
+            }
+        }
+    }
+
+    fun detachPlayer() {
+        activePlayer = null
+        activePlayerPosition = -1
+        attachedHolders.values.forEach { it.unbindPlayer() }
     }
 
     override fun getItemCount(): Int = items.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PhotoViewHolder {
         val view = LayoutInflater.from(parent.context).inflate(R.layout.item_photo_page, parent, false)
-        return PhotoViewHolder(view, onSingleTap)
+        return PhotoViewHolder(view, onSingleTap, onZoomStateChanged)
     }
 
     override fun onBindViewHolder(holder: PhotoViewHolder, position: Int) {
-        holder.bind(items[position], areControlsVisible)
+        val item = items[position]
+        holder.bind(item, areControlsVisible)
+        if (position == activePlayerPosition && activePlayer != null) {
+            holder.bindPlayer(activePlayer)
+        } else {
+            holder.unbindPlayer()
+        }
     }
 
     override fun onViewAttachedToWindow(holder: PhotoViewHolder) {
         super.onViewAttachedToWindow(holder)
-        attachedHolders[holder.bindingAdapterPosition] = holder
+        val pos = holder.bindingAdapterPosition
+        if (pos != RecyclerView.NO_POSITION) {
+            attachedHolders[pos] = holder
+            if (pos == activePlayerPosition && activePlayer != null) {
+                holder.bindPlayer(activePlayer)
+            }
+        }
     }
 
     override fun onViewDetachedFromWindow(holder: PhotoViewHolder) {
         super.onViewDetachedFromWindow(holder)
-        attachedHolders.remove(holder.bindingAdapterPosition)
+        val pos = holder.bindingAdapterPosition
+        if (pos != RecyclerView.NO_POSITION) {
+            attachedHolders.remove(pos)
+        }
         holder.resetZoom()
-        holder.pauseVideo()
+        holder.unbindPlayer()
     }
 
     class PhotoViewHolder(
         itemView: View,
-        private val onSingleTap: () -> Unit
+        private val onSingleTap: () -> Unit,
+        private val onZoomStateChanged: (isZoomed: Boolean) -> Unit
     ) : RecyclerView.ViewHolder(itemView) {
         private val zoomImageView: ZoomableImageView = itemView.findViewById(R.id.zoomImageView)
+        private val playerView: PlayerView = itemView.findViewById(R.id.playerView)
         private val videoOverlayContainer: View = itemView.findViewById(R.id.videoOverlayContainer)
         private val layoutDurationBadge: View = itemView.findViewById(R.id.layoutDurationBadge)
         private val tvDurationBadge: TextView = itemView.findViewById(R.id.tvDurationBadge)
@@ -82,100 +121,84 @@ class PhotoPagerAdapter(
         private val tvTotalDuration: TextView = itemView.findViewById(R.id.tvTotalDuration)
 
         private val handler = Handler(Looper.getMainLooper())
-        private var isPlaying = false
-        private var currentSec = 0
-        private var totalSec = 42
+        private var boundPlayer: ExoPlayer? = null
+        private var currentItem: LocalMediaItem? = null
+        private var isUserTrackingTouch = false
 
-        private val playbackRunnable = object : Runnable {
+        private val progressUpdateRunnable = object : Runnable {
             override fun run() {
+                val player = boundPlayer
+                if (player != null && player.isPlaying) {
+                    if (!isUserTrackingTouch) {
+                        val currentMs = player.currentPosition
+                        val totalMs = player.duration.coerceAtLeast(1L)
+                        videoSeekBar.max = totalMs.toInt()
+                        videoSeekBar.progress = currentMs.toInt()
+                        tvCurrentTime.text = formatMs(currentMs)
+                        tvTotalDuration.text = formatMs(totalMs)
+                    }
+                    handler.postDelayed(this, 250)
+                }
+            }
+        }
+
+        private val playerListener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                updatePlayPauseIcon(isPlaying)
                 if (isPlaying) {
-                    currentSec++
-                    if (currentSec >= totalSec) {
-                        currentSec = 0
-                        pauseVideo()
-                    } else {
-                        handler.postDelayed(this, 1000)
+                    handler.post(progressUpdateRunnable)
+                } else {
+                    handler.removeCallbacks(progressUpdateRunnable)
+                }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val player = boundPlayer ?: return
+                if (playbackState == Player.STATE_READY) {
+                    val durationMs = player.duration
+                    if (durationMs > 0) {
+                        videoSeekBar.max = durationMs.toInt()
+                        tvTotalDuration.text = formatMs(durationMs)
+                        tvDurationBadge.text = formatMs(durationMs)
                     }
-                    videoSeekBar.progress = currentSec
-                    tvCurrentTime.text = formatSeconds(currentSec)
                 }
             }
         }
 
-        fun bind(item: MediaItem, controlsVisible: Boolean) {
-            if (!item.contentUri.isNullOrEmpty()) {
-                zoomImageView.load(item.contentUri) {
-                    crossfade(true)
-                }
-            } else if (item.drawableRes != 0) {
-                zoomImageView.setImageResource(item.drawableRes)
-            } else {
-                zoomImageView.setImageResource(R.color.photo_tile_1)
-            }
-            zoomImageView.resetZoom()
-            zoomImageView.onSingleTapListener = onSingleTap
+        init {
+            zoomImageView.onSingleTapListener = { onSingleTap() }
+            zoomImageView.onZoomStateChanged = { zoomed -> onZoomStateChanged(zoomed) }
 
-            if (item.isVideo) {
-                videoOverlayContainer.visibility = View.VISIBLE
-                val durStr = item.duration ?: "0:42"
-                tvDurationBadge.text = durStr
-                tvTotalDuration.text = durStr
-                totalSec = parseDurationSeconds(durStr)
-                videoSeekBar.max = totalSec
-                currentSec = 0
-                videoSeekBar.progress = 0
-                tvCurrentTime.text = "0:00"
-                pauseVideo()
-
-                setOverlayControlsVisible(controlsVisible)
-
-                btnCenterPlayPause.setOnClickListener {
-                    togglePlayPause()
-                }
-
-                videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                        if (fromUser) {
-                            currentSec = progress
-                            tvCurrentTime.text = formatSeconds(currentSec)
-                        }
+            btnCenterPlayPause.setOnClickListener {
+                val player = boundPlayer ?: return@setOnClickListener
+                if (player.isPlaying) {
+                    player.pause()
+                } else {
+                    if (player.playbackState == Player.STATE_ENDED) {
+                        player.seekTo(0)
                     }
-
-                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-                })
-            } else {
-                pauseVideo()
-                videoOverlayContainer.visibility = View.GONE
+                    player.play()
+                }
             }
-        }
 
-        fun setOverlayControlsVisible(visible: Boolean) {
-            val alpha = if (visible) 1f else 0f
-            layoutDurationBadge.animate().alpha(alpha).setDuration(200).start()
-            videoBottomControls.animate().alpha(alpha).setDuration(200).start()
-            btnCenterPlayPause.animate().alpha(if (visible || !isPlaying) 1f else 0f).setDuration(200).start()
-        }
+            videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        tvCurrentTime.text = formatMs(progress.toLong())
+                    }
+                }
 
-        private fun togglePlayPause() {
-            if (isPlaying) {
-                pauseVideo()
-            } else {
-                startVideo()
-            }
-        }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                    isUserTrackingTouch = true
+                }
 
-        private fun startVideo() {
-            isPlaying = true
-            ivCenterPlayPause.setImageResource(R.drawable.ic_pause)
-            handler.removeCallbacks(playbackRunnable)
-            handler.postDelayed(playbackRunnable, 1000)
-        }
-
-        fun pauseVideo() {
-            isPlaying = false
-            ivCenterPlayPause.setImageResource(R.drawable.ic_play_arrow)
-            handler.removeCallbacks(playbackRunnable)
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    isUserTrackingTouch = false
+                    val player = boundPlayer ?: return
+                    val targetMs = seekBar?.progress?.toLong() ?: 0L
+                    player.seekTo(targetMs)
+                }
+            })
         }
 
         fun isZoomed(): Boolean = zoomImageView.isZoomed
@@ -184,21 +207,84 @@ class PhotoPagerAdapter(
             zoomImageView.resetZoom()
         }
 
-        private fun parseDurationSeconds(duration: String): Int {
-            val parts = duration.split(":")
-            return if (parts.size == 2) {
-                val m = parts[0].toIntOrNull() ?: 0
-                val s = parts[1].toIntOrNull() ?: 0
-                m * 60 + s
+        fun bind(item: LocalMediaItem, areControlsVisible: Boolean) {
+            currentItem = item
+            resetZoom()
+
+            if (item.isVideo) {
+                zoomImageView.visibility = View.GONE
+                playerView.visibility = View.VISIBLE
+                videoOverlayContainer.visibility = if (areControlsVisible) View.VISIBLE else View.GONE
+                tvStreamBadge.text = item.mimeType.substringAfter("/")
+                val initialDuration = item.durationMs
+                tvTotalDuration.text = formatMs(initialDuration)
+                tvDurationBadge.text = formatMs(initialDuration)
+                tvCurrentTime.text = "0:00"
+                videoSeekBar.progress = 0
             } else {
-                42
+                unbindPlayer()
+                playerView.visibility = View.GONE
+                videoOverlayContainer.visibility = View.GONE
+                zoomImageView.visibility = View.VISIBLE
+
+                // Load with Coil at display size to avoid allocating 48MP raw bitmap
+                zoomImageView.load(item.contentUri) {
+                    crossfade(true)
+                    size(1080, 1920)
+                    placeholder(R.color.black)
+                    error(R.color.surface_card)
+                }
             }
         }
 
-        private fun formatSeconds(sec: Int): String {
-            val m = sec / 60
-            val s = sec % 60
-            return String.format("%d:%02d", m, s)
+        fun bindPlayer(player: ExoPlayer?) {
+            if (boundPlayer == player && playerView.player == player) return
+            unbindPlayer()
+
+            val item = currentItem ?: return
+            if (!item.isVideo || player == null) return
+
+            boundPlayer = player
+            playerView.player = player
+            player.addListener(playerListener)
+
+            val mediaItem = androidx.media3.common.MediaItem.fromUri(item.contentUri)
+            player.setMediaItem(mediaItem)
+            player.prepare()
+            updatePlayPauseIcon(player.isPlaying)
+            if (player.isPlaying) {
+                handler.post(progressUpdateRunnable)
+            }
+        }
+
+        fun unbindPlayer() {
+            handler.removeCallbacks(progressUpdateRunnable)
+            boundPlayer?.removeListener(playerListener)
+            if (playerView.player != null) {
+                playerView.player = null
+            }
+            boundPlayer = null
+            updatePlayPauseIcon(false)
+        }
+
+        private fun updatePlayPauseIcon(isPlaying: Boolean) {
+            ivCenterPlayPause.setImageResource(
+                if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
+            )
+        }
+
+        fun setOverlayControlsVisible(visible: Boolean) {
+            val item = currentItem ?: return
+            if (item.isVideo) {
+                videoOverlayContainer.visibility = if (visible) View.VISIBLE else View.GONE
+            }
+        }
+
+        private fun formatMs(ms: Long): String {
+            val totalSec = (ms / 1000L).coerceAtLeast(0L)
+            val min = totalSec / 60
+            val sec = totalSec % 60
+            return String.format(Locale.US, "%d:%02d", min, sec)
         }
     }
 }

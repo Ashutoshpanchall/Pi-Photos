@@ -8,6 +8,7 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import androidx.appcompat.widget.AppCompatImageView
+import com.example.piphotos.media.ZoomGestureMath
 
 class ZoomableImageView @JvmOverloads constructor(
     context: Context,
@@ -15,31 +16,34 @@ class ZoomableImageView @JvmOverloads constructor(
     defStyle: Int = 0
 ) : AppCompatImageView(context, attrs, defStyle) {
 
-    private val matrix = Matrix()
+    private val currentMatrix = Matrix()
     private val prevMatrix = Matrix()
+    private val matrixValues = FloatArray(9)
 
     private var mode = NONE
     private val start = PointF()
     private val mid = PointF()
     private var oldDist = 1f
 
-    private var scale = 1f
+    var scale = 1f
+        private set
     private val minScale = 1f
-    private val maxScale = 4f
+    private val maxScale = 4.5f
 
     private val scaleDetector: ScaleGestureDetector
     private val gestureDetector: GestureDetector
 
     var onSingleTapListener: (() -> Unit)? = null
+    var onZoomStateChanged: ((isZoomed: Boolean) -> Unit)? = null
 
     val isZoomed: Boolean
-        get() = scale > 1.05f
+        get() = ZoomGestureMath.shouldLockPager(scale)
 
     init {
         scaleType = ScaleType.MATRIX
         scaleDetector = ScaleGestureDetector(context, ScaleListener())
         gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onSingleTapUp(e: MotionEvent): Boolean {
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 onSingleTapListener?.invoke()
                 return true
             }
@@ -48,10 +52,11 @@ class ZoomableImageView @JvmOverloads constructor(
                 if (scale > minScale + 0.1f) {
                     resetZoom()
                 } else {
-                    matrix.postScale(2.5f, 2.5f, e.x, e.y)
                     scale = 2.5f
-                    imageMatrix = matrix
-                    parent?.requestDisallowInterceptTouchEvent(true)
+                    currentMatrix.postScale(2.5f, 2.5f, e.x, e.y)
+                    clampTranslation()
+                    imageMatrix = currentMatrix
+                    notifyZoomState()
                 }
                 return true
             }
@@ -59,10 +64,15 @@ class ZoomableImageView @JvmOverloads constructor(
     }
 
     fun resetZoom() {
-        matrix.reset()
         scale = 1f
         centerImage()
-        parent?.requestDisallowInterceptTouchEvent(false)
+        notifyZoomState()
+    }
+
+    private fun notifyZoomState() {
+        val zoomed = isZoomed
+        onZoomStateChanged?.invoke(zoomed)
+        parent?.requestDisallowInterceptTouchEvent(zoomed)
     }
 
     fun centerImage() {
@@ -76,12 +86,12 @@ class ZoomableImageView @JvmOverloads constructor(
         if (dw <= 0f || dh <= 0f) return
 
         val scaleFactor = minOf(viewWidth / dw, viewHeight / dh)
-        matrix.reset()
-        matrix.postScale(scaleFactor, scaleFactor)
+        currentMatrix.reset()
+        currentMatrix.postScale(scaleFactor, scaleFactor)
         val dx = (viewWidth - dw * scaleFactor) / 2f
         val dy = (viewHeight - dh * scaleFactor) / 2f
-        matrix.postTranslate(dx, dy)
-        imageMatrix = matrix
+        currentMatrix.postTranslate(dx, dy)
+        imageMatrix = currentMatrix
         scale = 1f
     }
 
@@ -92,28 +102,44 @@ class ZoomableImageView @JvmOverloads constructor(
         }
     }
 
+    private fun clampTranslation() {
+        val d = drawable ?: return
+        val viewWidth = width.toFloat()
+        val viewHeight = height.toFloat()
+        if (viewWidth <= 0f || viewHeight <= 0f) return
+
+        currentMatrix.getValues(matrixValues)
+        val curScale = matrixValues[Matrix.MSCALE_X]
+        val transX = matrixValues[Matrix.MTRANS_X]
+        val transY = matrixValues[Matrix.MTRANS_Y]
+
+        val contentW = d.intrinsicWidth * curScale
+        val contentH = d.intrinsicHeight * curScale
+
+        val clampedX = ZoomGestureMath.clampTranslation(viewWidth, contentW, transX)
+        val clampedY = ZoomGestureMath.clampTranslation(viewHeight, contentH, transY)
+
+        matrixValues[Matrix.MTRANS_X] = clampedX
+        matrixValues[Matrix.MTRANS_Y] = clampedY
+        currentMatrix.setValues(matrixValues)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         scaleDetector.onTouchEvent(event)
         gestureDetector.onTouchEvent(event)
 
         val curr = PointF(event.x, event.y)
 
-        if (isZoomed) {
-            parent?.requestDisallowInterceptTouchEvent(true)
-        } else {
-            parent?.requestDisallowInterceptTouchEvent(false)
-        }
-
         when (event.action and MotionEvent.ACTION_MASK) {
             MotionEvent.ACTION_DOWN -> {
-                prevMatrix.set(matrix)
+                prevMatrix.set(currentMatrix)
                 start.set(curr)
                 mode = DRAG
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 oldDist = spacing(event)
                 if (oldDist > 10f) {
-                    prevMatrix.set(matrix)
+                    prevMatrix.set(currentMatrix)
                     midPoint(mid, event)
                     mode = ZOOM
                     parent?.requestDisallowInterceptTouchEvent(true)
@@ -121,15 +147,20 @@ class ZoomableImageView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 mode = NONE
-                if (!isZoomed) {
-                    parent?.requestDisallowInterceptTouchEvent(false)
+                if (scale < minScale + 0.05f) {
+                    resetZoom()
+                } else {
+                    clampTranslation()
+                    imageMatrix = currentMatrix
                 }
+                notifyZoomState()
             }
             MotionEvent.ACTION_MOVE -> {
                 if (mode == DRAG && isZoomed) {
-                    matrix.set(prevMatrix)
-                    matrix.postTranslate(curr.x - start.x, curr.y - start.y)
-                    imageMatrix = matrix
+                    currentMatrix.set(prevMatrix)
+                    currentMatrix.postTranslate(curr.x - start.x, curr.y - start.y)
+                    clampTranslation()
+                    imageMatrix = currentMatrix
                 }
             }
         }
@@ -162,8 +193,10 @@ class ZoomableImageView @JvmOverloads constructor(
                 mScaleFactor = minScale / origScale
             }
 
-            matrix.postScale(mScaleFactor, mScaleFactor, detector.focusX, detector.focusY)
-            imageMatrix = matrix
+            currentMatrix.postScale(mScaleFactor, mScaleFactor, detector.focusX, detector.focusY)
+            clampTranslation()
+            imageMatrix = currentMatrix
+            notifyZoomState()
             return true
         }
     }

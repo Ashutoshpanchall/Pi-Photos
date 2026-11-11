@@ -209,15 +209,11 @@ class TimelineFragment : Fragment() {
 
     private fun setupTimelineView() {
         binding.timelineView.onItemClick = { item ->
+            val items = binding.timelineView.currentRawItems
             PhotoViewerActivity.start(
                 context = requireContext(),
-                photoId = item.id.toString(),
-                drawableRes = 0,
-                title = "${if (item.isVideo) "VID" else "IMG"}_${item.id}",
-                date = "",
-                category = item.bucketName,
-                isVideo = item.isVideo,
-                contentUri = item.contentUri.toString()
+                startingId = item.id,
+                items = items
             )
         }
 
