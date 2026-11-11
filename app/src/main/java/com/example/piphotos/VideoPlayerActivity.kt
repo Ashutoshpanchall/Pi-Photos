@@ -10,7 +10,7 @@ class VideoPlayerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val title = intent.getStringExtra(EXTRA_VIDEO_TITLE) ?: "Mountain Lake Reflection"
-        val meta = intent.getStringExtra(EXTRA_VIDEO_META) ?: "1080p 60fps · Tailscale Stream"
+        val meta = intent.getStringExtra(EXTRA_VIDEO_META) ?: "1080p 60fps · Video"
         start(this, title, meta)
         finish()
         overridePendingTransition(0, 0)

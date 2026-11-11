@@ -58,7 +58,7 @@ class UserDetailActivity : AppCompatActivity() {
             val action = if (user.isActive) "Disable" else "Enable"
             AlertDialog.Builder(this)
                 .setTitle("$action ${user.name}?")
-                .setMessage("When disabled, this user cannot access their vault or stream media over Tailscale.")
+                .setMessage("When disabled, this user cannot access their vault or stream media over private network.")
                 .setPositiveButton(action) { _, _ ->
                     NodeRepository.toggleUserStatus(userId)
                     Toast.makeText(this, "User access updated", Toast.LENGTH_SHORT).show()
@@ -72,7 +72,7 @@ class UserDetailActivity : AppCompatActivity() {
             val user = NodeRepository.getUser(userId) ?: return@setOnClickListener
             AlertDialog.Builder(this)
                 .setTitle("Remove ${user.name} from Node?")
-                .setMessage("Are you sure? This will revoke the user's Tailscale vault access and purge their encrypted blobs (${user.usedGB} GB) from the Pi SSD. This action cannot be undone.")
+                .setMessage("Are you sure? This will revoke the user's vault access and purge their encrypted blobs (${user.usedGB} GB) from the server storage. This action cannot be undone.")
                 .setPositiveButton("Remove Permanently") { _, _ ->
                     NodeRepository.removeUser(userId)
                     Toast.makeText(this, "${user.name} removed from node", Toast.LENGTH_SHORT).show()
@@ -173,7 +173,7 @@ class UserDetailActivity : AppCompatActivity() {
         var isTB = false
         var activePlan: RebalancePlan = NodeRepository.planAutoRebalance(userId, selectedQuotaGB)
 
-        // Generate dynamic presets tailored to N users and SSD size
+        // Generate dynamic presets tailored to N users and storage size
         val presets = NodeRepository.getDynamicPresetsForUser(userId)
         val presetButtons = listOf(btnPreset1, btnPreset2, btnPreset3, btnPreset4)
 
@@ -328,7 +328,7 @@ class UserDetailActivity : AppCompatActivity() {
                             "User: ${user.name}\n" +
                             "New Quota: ${String.format("%.1f", candidateQuota)} GB ($deltaStr)\n\n" +
                             activePlan.summaryMessage + "\n\n" +
-                            "Apply this intelligent distribution to the Raspberry Pi SSD?"
+                            "Apply this intelligent distribution to the server storage?"
                         )
                         .setPositiveButton("Apply") { _, _ ->
                             NodeRepository.applyRebalancePlan(activePlan)

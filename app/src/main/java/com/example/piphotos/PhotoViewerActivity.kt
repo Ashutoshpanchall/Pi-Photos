@@ -89,6 +89,7 @@ class PhotoViewerActivity : AppCompatActivity() {
             val fallbackTitle = intent.getStringExtra(EXTRA_PHOTO_TITLE) ?: "Media"
             val fallbackDate = intent.getStringExtra(EXTRA_PHOTO_DATE) ?: "1 Nov · 10:20 am"
             val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, false)
+            val contentUri = intent.getStringExtra(EXTRA_CONTENT_URI)
             mediaItems.add(
                 MediaItem(
                     id = initialId ?: "temp_1",
@@ -96,6 +97,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                     date = fallbackDate,
                     category = category,
                     drawableRes = fallbackRes,
+                    contentUri = contentUri,
                     isVideo = isVideo
                 )
             )
@@ -172,7 +174,7 @@ class PhotoViewerActivity : AppCompatActivity() {
             binding.swipeDismissContainer.animateDismiss()
         }
 
-        // Tapping Date/Time header opens EXIF & SSD details bottom sheet
+        // Tapping Date/Time header opens EXIF details bottom sheet
         binding.layoutDateHeader.setOnClickListener {
             showPhotoInfoSheet()
         }
@@ -349,6 +351,7 @@ class PhotoViewerActivity : AppCompatActivity() {
         const val EXTRA_PHOTO_DATE = "extra_photo_date"
         const val EXTRA_CATEGORY = "extra_category"
         const val EXTRA_IS_VIDEO = "extra_is_video"
+        const val EXTRA_CONTENT_URI = "extra_content_uri"
 
         private const val MENU_ABOUT = 101
         private const val MENU_LENS = 102
@@ -362,7 +365,8 @@ class PhotoViewerActivity : AppCompatActivity() {
             title: String = "Photo",
             date: String = "1 Nov · 10:20 am",
             category: String = "Recents",
-            isVideo: Boolean = false
+            isVideo: Boolean = false,
+            contentUri: String? = null
         ) {
             val intent = Intent(context, PhotoViewerActivity::class.java).apply {
                 putExtra(EXTRA_PHOTO_ID, photoId)
@@ -371,6 +375,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                 putExtra(EXTRA_PHOTO_DATE, date)
                 putExtra(EXTRA_CATEGORY, category)
                 putExtra(EXTRA_IS_VIDEO, isVideo)
+                putExtra(EXTRA_CONTENT_URI, contentUri)
             }
             context.startActivity(intent)
         }

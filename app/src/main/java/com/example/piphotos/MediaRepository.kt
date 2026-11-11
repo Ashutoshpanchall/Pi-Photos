@@ -1,5 +1,8 @@
 package com.example.piphotos
 
+import android.content.Context
+import com.example.piphotos.media.LocalMediaIndex
+
 object MediaRepository {
 
     private var source: MediaSource = DeviceMediaSource()
@@ -31,6 +34,23 @@ object MediaRepository {
         val item = source.getItem(id) ?: return false
         item.isFavorite = !item.isFavorite
         return item.isFavorite
+    }
+
+    suspend fun toggleFavorite(context: Context, id: Long): Boolean {
+        val favRepo = LocalMediaIndex.getInstance(context).favoritesRepo
+        val newState = favRepo.toggleFavorite(id)
+        val item = source.getItem(id.toString())
+        item?.isFavorite = newState
+        return newState
+    }
+
+    suspend fun isFavorite(context: Context, id: Long): Boolean {
+        val favRepo = LocalMediaIndex.getInstance(context).favoritesRepo
+        return favRepo.isFavorite(id)
+    }
+
+    suspend fun trash(ids: List<Long>): DeleteResult {
+        return deleteHandler.trash(ids)
     }
 
     fun moveToTrash(id: String) {

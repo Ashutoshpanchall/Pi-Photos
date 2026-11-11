@@ -179,7 +179,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Raspberry Pi Zero 2 W"
+                    android:text="Node Storage"
                     android:textColor="@color/text_primary"
                     android:textSize="12sp"
                     android:textStyle="bold" />
@@ -218,22 +218,28 @@
             </LinearLayout>
 
             <!-- SECTION: Personal Storage Quota -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:layout_marginBottom="10dp"
-                android:text="@string/section_personal_quota"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-
             <LinearLayout
+                android:id="@+id/cardPersonalQuota"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_card_white"
-                android:orientation="vertical"
-                android:padding="16dp">
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:layout_marginBottom="10dp"
+                    android:text="@string/section_personal_quota"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_card_white"
+                    android:orientation="vertical"
+                    android:padding="16dp">
 
                 <RelativeLayout
                     android:layout_width="match_parent"
@@ -294,6 +300,7 @@
                         android:textColor="@color/text_secondary"
                         android:textSize="12sp" />
                 </LinearLayout>
+            </LinearLayout>
             </LinearLayout>
 
             <!-- SECTION: People on this Node (Hidden in Local-Only Mode) -->
@@ -484,7 +491,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
                         android:layout_marginBottom="14dp"
-                        android:text="Connect a Raspberry Pi with external storage to store your encrypted backups locally at home with zero subscription."
+                        android:text="Connect home storage to store your encrypted backups locally with zero subscription."
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 
@@ -520,9 +527,9 @@
                 android:paddingStart="16dp"
                 android:paddingEnd="16dp">
 
-                <!-- Tailscale VPN Node (Hidden in Local-Only) -->
+                <!-- Remote VPN Node (Hidden in Local-Only) -->
                 <RelativeLayout
-                    android:id="@+id/rowTailscale"
+                    android:id="@+id/rowRemoteNode"
                     android:layout_width="match_parent"
                     android:layout_height="60dp"
                     android:visibility="gone"
@@ -554,7 +561,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="@string/pref_tailscale"
+                            android:text="@string/pref_remote_node"
                             android:textColor="@color/text_primary"
                             android:textSize="15sp"
                             android:textStyle="bold" />
@@ -563,7 +570,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="@string/pref_tailscale_val"
+                            android:text="@string/pref_remote_node_val"
                             android:textColor="@color/status_green"
                             android:textSize="12sp"
                             android:textStyle="bold" />

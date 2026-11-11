@@ -11,7 +11,7 @@ data class LocalMediaItem(
     val dateTakenMs: Long,
     val dateAddedSec: Long,
     val dateModifiedSec: Long,
-    val bucketId: String,
+    val bucketId: Long,
     val bucketName: String,
     val durationMs: Long = 0L,
     val sizeBytes: Long = 0L,
@@ -25,6 +25,28 @@ data class LocalMediaItem(
         }
 
     val effectiveDateMs: Long
-        get() = if (dateTakenMs > 0L) dateTakenMs else (dateAddedSec * 1000L)
-}
+        get() = computeEffectiveDateMs(dateTakenMs, dateModifiedSec, dateAddedSec)
 
+    companion object {
+        fun computeEffectiveDateMs(
+            dateTakenMs: Long,
+            dateModifiedSec: Long,
+            dateAddedSec: Long,
+            nowMs: Long = System.currentTimeMillis()
+        ): Long {
+            val maxAllowedDateMs = nowMs + 86_400_000L // 1 day in the future
+            if (dateTakenMs in 1..maxAllowedDateMs) {
+                return dateTakenMs
+            }
+            val modMs = dateModifiedSec * 1000L
+            if (modMs in 1..maxAllowedDateMs) {
+                return modMs
+            }
+            val addMs = dateAddedSec * 1000L
+            if (addMs in 1..maxAllowedDateMs) {
+                return addMs
+            }
+            return 0L
+        }
+    }
+}

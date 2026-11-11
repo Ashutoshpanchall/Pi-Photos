@@ -2,6 +2,8 @@ package com.example.piphotos
 
 import com.example.piphotos.db.FavoriteDao
 import com.example.piphotos.db.FavoriteRecord
+import com.example.piphotos.db.FavoritesRepository
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,7 +11,7 @@ import org.junit.Test
 
 class PhaseG2FavoritesTest {
 
-    private class FakeFavoriteDao : FavoriteDao {
+    private class TestFavoriteDao : FavoriteDao {
         private val records = mutableMapOf<Long, FavoriteRecord>()
 
         override fun getAllFavoriteIds(): List<Long> = records.keys.toList()
@@ -28,27 +30,29 @@ class PhaseG2FavoritesTest {
     }
 
     @Test
-    fun favoriteDao_addCheckAndRemoveOperatesCorrectly() {
-        val dao = FakeFavoriteDao()
-        assertEquals(0, dao.favoriteCount)
-        assertFalse(dao.isFavorite(101L))
+    fun favoritesRepository_toggleAndQueryPersists() = runBlocking {
+        val dao = TestFavoriteDao()
+        val repo = FavoritesRepository(dao)
 
-        // Add favorite
-        dao.addFavorite(FavoriteRecord(101L, System.currentTimeMillis()))
-        assertTrue(dao.isFavorite(101L))
-        assertEquals(1, dao.favoriteCount)
-        assertEquals(listOf(101L), dao.allFavoriteIds)
+        assertFalse(repo.isFavorite(101L))
+        assertEquals(0, repo.getAllFavoriteIds().size)
 
-        // Add second favorite
-        dao.addFavorite(FavoriteRecord(102L, System.currentTimeMillis()))
-        assertEquals(2, dao.favoriteCount)
-        assertTrue(dao.allFavoriteIds.containsAll(listOf(101L, 102L)))
+        // Toggle on
+        val added = repo.toggleFavorite(101L)
+        assertTrue(added)
+        assertTrue(repo.isFavorite(101L))
+        assertEquals(setOf(101L), repo.getAllFavoriteIds())
 
-        // Remove first favorite
-        dao.removeFavorite(101L)
-        assertFalse(dao.isFavorite(101L))
-        assertTrue(dao.isFavorite(102L))
-        assertEquals(1, dao.favoriteCount)
+        // Toggle second
+        repo.toggleFavorite(102L)
+        assertTrue(repo.isFavorite(102L))
+        assertEquals(2, repo.getAllFavoriteIds().size)
+
+        // Toggle off first
+        val removed = repo.toggleFavorite(101L)
+        assertFalse(removed)
+        assertFalse(repo.isFavorite(101L))
+        assertTrue(repo.isFavorite(102L))
+        assertEquals(1, repo.getAllFavoriteIds().size)
     }
 }
-

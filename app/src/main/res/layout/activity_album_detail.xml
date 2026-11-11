@@ -132,7 +132,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Items in Trash are permanently deleted from your SSD after 30 days."
+            android:text="Items in Trash are permanently deleted after 30 days."
             android:textColor="@color/error_text"
             android:textSize="12sp"
             android:textStyle="bold" />

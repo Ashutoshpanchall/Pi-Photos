@@ -38,7 +38,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="250.0 GB Attached SSD · 4 Users Managed"
+                android:text="250.0 GB Attached Storage · 4 Users Managed"
                 android:textColor="@color/text_secondary"
                 android:textSize="13sp" />
         </LinearLayout>
@@ -113,7 +113,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="⚠️ Over-allocated by 25.0 GB (110% of physical SSD)"
+                android:text="⚠️ Over-allocated by 25.0 GB (110% of physical storage)"
                 android:textColor="@color/status_red"
                 android:textSize="12sp"
                 android:textStyle="bold" />

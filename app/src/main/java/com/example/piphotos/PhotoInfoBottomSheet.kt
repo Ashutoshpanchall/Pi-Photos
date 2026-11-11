@@ -23,7 +23,7 @@ class PhotoInfoBottomSheet : BottomSheetDialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        val title = arguments?.getString(ARG_TITLE) ?: "IMG_20260618_0921.jpg"
+        val title = arguments?.getString(ARG_TITLE) ?: "--"
         val date = arguments?.getString(ARG_DATE) ?: "June 18, 2026 · 09:21 AM"
 
         binding.sheetTitle.text = title

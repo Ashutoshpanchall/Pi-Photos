@@ -133,7 +133,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_alignParentEnd="true"
-                        android:text="Raspberry Pi Zero 2 W"
+                        android:text="Home Storage Node"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
@@ -224,7 +224,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
                 android:layout_marginBottom="8dp"
-                android:text="STORAGE CONFIGURATION &amp; SSD"
+                android:text="STORAGE CONFIGURATION &amp; DRIVE"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp"
                 android:textStyle="bold" />
@@ -328,7 +328,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_alignParentEnd="true"
-                        android:text="/mnt/photostore/vault"
+                        android:text="/mnt/storage/vault"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp" />
                 </RelativeLayout>
@@ -368,7 +368,7 @@
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_card_white"
                     android:gravity="center"
-                    android:text="Perform SSD SMART Self-Test"
+                    android:text="Perform Drive SMART Self-Test"
                     android:textColor="@color/primary_blue"
                     android:textSize="14sp"
                     android:textStyle="bold" />

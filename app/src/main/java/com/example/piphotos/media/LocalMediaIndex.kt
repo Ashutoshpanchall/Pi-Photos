@@ -20,11 +20,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 
 class LocalMediaIndex(private val appContext: Context) {
 
@@ -32,9 +33,16 @@ class LocalMediaIndex(private val appContext: Context) {
     private val scanner = MediaStoreScanner(appContext)
     val favoritesRepo = FavoritesRepository(appContext)
 
-    private val itemsMap = ConcurrentHashMap<Long, LocalMediaItem>()
+    private val mutex = Mutex()
+
+    @Volatile
     private var lastGeneration: Long = 0L
+
+    @Volatile
     private var lastVersion: String = ""
+
+    // Single source of truth for in-memory index, kept sorted by effectiveDateMs DESC
+    private val items = ArrayList<LocalMediaItem>()
 
     private val _mediaFlow = MutableStateFlow<List<LocalMediaItem>>(emptyList())
     val mediaFlow: StateFlow<List<LocalMediaItem>> = _mediaFlow.asStateFlow()
@@ -90,70 +98,76 @@ class LocalMediaIndex(private val appContext: Context) {
     }
 
     suspend fun rebuildIndex(): IndexStats = withContext(Dispatchers.IO) {
-        val (items, stats) = scanner.performFullScan()
-        itemsMap.clear()
-        for (item in items) {
-            itemsMap[item.id] = item
+        mutex.withLock {
+            doRebuildLocked()
         }
+    }
+
+    private fun doRebuildLocked(): IndexStats {
+        val (scannedItems, stats) = scanner.performFullScan()
+        items.clear()
+        items.ensureCapacity(scannedItems.size)
+        items.addAll(scannedItems)
+        items.sortByDescending { it.effectiveDateMs }
+
         lastGeneration = stats.generation
         lastVersion = stats.mediaStoreVersion
 
-        val sortedList = itemsMap.values.sortedByDescending { it.effectiveDateMs }
-        _mediaFlow.value = sortedList
+        _mediaFlow.value = ArrayList(items)
         _statsFlow.value = stats
 
         startObserving()
-        stats
+        return stats
     }
 
     suspend fun refreshDelta(): IndexStats = withContext(Dispatchers.IO) {
-        val currentVersion = scanner.getCurrentMediaStoreVersion()
-        if (lastVersion.isNotEmpty() && currentVersion != lastVersion) {
-            return@withContext rebuildIndex()
+        mutex.withLock {
+            val currentVersion = scanner.getCurrentMediaStoreVersion()
+            if (lastVersion.isNotEmpty() && currentVersion != lastVersion) {
+                return@withLock doRebuildLocked()
+            }
+
+            val startTime = SystemClock.elapsedRealtime()
+
+            // 1. Detect and prune deletions by re-reading active IDs
+            val activeIds = scanner.queryActiveIds()
+            items.removeAll { it.id !in activeIds }
+
+            // 2. Fetch modified or new items since lastGeneration
+            val modifiedItems = scanner.performDeltaScan(lastGeneration)
+            if (modifiedItems.isNotEmpty()) {
+                val modifiedIds = modifiedItems.map { it.id }.toSet()
+                items.removeAll { it.id in modifiedIds }
+                items.addAll(modifiedItems)
+                items.sortByDescending { it.effectiveDateMs }
+            }
+
+            val newMaxGen = modifiedItems.maxOfOrNull { it.generationModified } ?: lastGeneration
+            lastGeneration = maxOf(lastGeneration, newMaxGen)
+            lastVersion = currentVersion
+
+            val elapsed = SystemClock.elapsedRealtime() - startTime
+
+            val photosCount = items.count { !it.isVideo }
+            val videosCount = items.count { it.isVideo }
+            val foldersMap = items.groupingBy { it.bucketName }.eachCount()
+
+            val updatedStats = IndexStats(
+                totalItems = items.size,
+                totalPhotos = photosCount,
+                totalVideos = videosCount,
+                totalFolders = foldersMap.size,
+                buildTimeMs = elapsed,
+                lastScanTimestampMs = System.currentTimeMillis(),
+                mediaStoreVersion = lastVersion,
+                generation = lastGeneration,
+                folderBreakdown = foldersMap
+            )
+
+            _mediaFlow.value = ArrayList(items)
+            _statsFlow.value = updatedStats
+            updatedStats
         }
-
-        val startTime = SystemClock.elapsedRealtime()
-
-        // 1. Detect and prune deletions by re-reading active IDs
-        val activeIds = scanner.queryActiveIds()
-        val currentKeys = itemsMap.keys.toSet()
-        val deletedIds = currentKeys - activeIds
-        for (delId in deletedIds) {
-            itemsMap.remove(delId)
-        }
-
-        // 2. Fetch modified or new items since lastGeneration
-        val modifiedItems = scanner.performDeltaScan(lastGeneration)
-        for (item in modifiedItems) {
-            itemsMap[item.id] = item
-        }
-
-        val newMaxGen = modifiedItems.maxOfOrNull { it.generationModified } ?: lastGeneration
-        lastGeneration = maxOf(lastGeneration, newMaxGen)
-        lastVersion = currentVersion
-
-        val sortedList = itemsMap.values.sortedByDescending { it.effectiveDateMs }
-        val elapsed = SystemClock.elapsedRealtime() - startTime
-
-        val photosCount = sortedList.count { !it.isVideo }
-        val videosCount = sortedList.count { it.isVideo }
-        val foldersMap = sortedList.groupingBy { it.bucketName }.eachCount()
-
-        val updatedStats = IndexStats(
-            totalItems = sortedList.size,
-            totalPhotos = photosCount,
-            totalVideos = videosCount,
-            totalFolders = foldersMap.size,
-            buildTimeMs = elapsed,
-            lastScanTimestampMs = System.currentTimeMillis(),
-            mediaStoreVersion = lastVersion,
-            generation = lastGeneration,
-            folderBreakdown = foldersMap
-        )
-
-        _mediaFlow.value = sortedList
-        _statsFlow.value = updatedStats
-        updatedStats
     }
 
     fun getAllItems(): List<LocalMediaItem> {
@@ -161,7 +175,8 @@ class LocalMediaIndex(private val appContext: Context) {
     }
 
     fun getItem(id: Long): LocalMediaItem? {
-        return itemsMap[id]
+        val current = _mediaFlow.value
+        return current.firstOrNull { it.id == id }
     }
 
     suspend fun getFavoriteItems(): List<LocalMediaItem> = withContext(Dispatchers.IO) {
@@ -173,28 +188,33 @@ class LocalMediaIndex(private val appContext: Context) {
         return _mediaFlow.value.filter { it.isVideo }
     }
 
-    fun getItemsForFolder(bucketId: String): List<LocalMediaItem> {
+    fun getItemsForFolder(bucketId: Long): List<LocalMediaItem> {
         return _mediaFlow.value.filter { it.bucketId == bucketId }
+    }
+
+    fun getItemsForFolderName(bucketName: String): List<LocalMediaItem> {
+        return _mediaFlow.value.filter { it.bucketName.equals(bucketName, ignoreCase = true) }
     }
 
     fun getFolderList(): List<FolderItem> {
         val grouped = _mediaFlow.value.groupBy { it.bucketId }
-        val folders = mutableListOf<FolderItem>()
-        for ((bucketId, items) in grouped) {
-            val first = items.first()
+        val folders = ArrayList<FolderItem>(grouped.size)
+        for ((bucketId, bucketItems) in grouped) {
+            val first = bucketItems.first()
             val coverUri = first.contentUri.toString()
             folders.add(
                 FolderItem(
-                    bucketId = bucketId,
+                    bucketId = bucketId.toString(),
                     name = first.bucketName,
                     path = "",
                     coverUri = coverUri,
-                    itemCount = items.size,
-                    sizeBytes = items.sumOf { it.sizeBytes }
+                    itemCount = bucketItems.size,
+                    sizeBytes = bucketItems.sumOf { it.sizeBytes }
                 )
             )
         }
-        return folders.sortedByDescending { it.itemCount }
+        folders.sortByDescending { it.itemCount }
+        return folders
     }
 
     fun toUiMediaItem(localItem: LocalMediaItem, isFav: Boolean = false): MediaItem {
@@ -216,7 +236,7 @@ class LocalMediaIndex(private val appContext: Context) {
             isVideo = localItem.isVideo,
             duration = durationFormatted,
             dateTakenMs = localItem.effectiveDateMs,
-            bucketId = localItem.bucketId,
+            bucketId = localItem.bucketId.toString(),
             bucketName = localItem.bucketName,
             mimeType = localItem.mimeType,
             sizeBytes = localItem.sizeBytes,

@@ -8,8 +8,11 @@ import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import com.example.piphotos.databinding.ActivityAlbumDetailBinding
+import com.example.piphotos.media.LocalMediaIndex
+import kotlinx.coroutines.launch
 
 class AlbumDetailActivity : AppCompatActivity() {
 
@@ -65,7 +68,15 @@ class AlbumDetailActivity : AppCompatActivity() {
         adapter = MediaGridAdapter(
             items = mediaItems,
             onPhotoClick = { item ->
-                PhotoViewerActivity.start(this, item.id, item.drawableRes, item.title, item.date, currentCategory)
+                PhotoViewerActivity.start(
+                    context = this,
+                    photoId = item.id,
+                    drawableRes = item.drawableRes,
+                    title = item.title,
+                    date = item.date,
+                    category = currentCategory,
+                    contentUri = item.contentUri
+                )
             },
             onVideoClick = { item ->
                 PhotoViewerActivity.start(
@@ -75,7 +86,8 @@ class AlbumDetailActivity : AppCompatActivity() {
                     title = item.title,
                     date = item.date,
                     category = currentCategory,
-                    isVideo = true
+                    isVideo = true,
+                    contentUri = item.contentUri
                 )
             },
             onSelectionChanged = { count ->
@@ -97,25 +109,45 @@ class AlbumDetailActivity : AppCompatActivity() {
     }
 
     private fun loadData() {
-        val queryCategory = when {
-            currentCategory.contains("Vault", ignoreCase = true) -> "vault"
-            else -> currentCategory
-        }
-        mediaItems = MediaRepository.getMediaForCategory(queryCategory).toMutableList()
-        adapter.updateData(mediaItems)
+        val index = LocalMediaIndex.getInstance(this)
+        val bucketId = intent.getLongExtra(EXTRA_BUCKET_ID, -1L)
 
-        val isTrash = currentCategory.equals("Trash", ignoreCase = true)
-        binding.layoutTrashBanner.visibility = if (isTrash && mediaItems.isNotEmpty()) View.VISIBLE else View.GONE
-        binding.btnEmptyTrash.visibility = if (isTrash && mediaItems.isNotEmpty()) View.VISIBLE else View.GONE
-        binding.btnSelect.visibility = if (isTrash && mediaItems.isEmpty()) View.GONE else View.VISIBLE
+        lifecycleScope.launch {
+            val localItems = when {
+                bucketId != -1L -> index.getItemsForFolder(bucketId)
+                currentCategory.equals("Favorites", ignoreCase = true) -> index.getFavoriteItems()
+                currentCategory.equals("Videos", ignoreCase = true) -> index.getVideoItems()
+                currentCategory.equals("Recents", ignoreCase = true) -> index.getAllItems()
+                currentCategory.equals("Trash", ignoreCase = true) -> emptyList()
+                else -> {
+                    val folderMatches = index.getItemsForFolderName(currentCategory)
+                    if (folderMatches.isNotEmpty()) folderMatches else emptyList()
+                }
+            }
 
-        if (mediaItems.isEmpty()) {
-            showEmptyState()
-        } else {
-            binding.layoutEmptyState.visibility = View.GONE
-            binding.rvMediaGrid.visibility = View.VISIBLE
+            val favIds = index.favoritesRepo.getAllFavoriteIds()
+            mediaItems = if (localItems.isNotEmpty()) {
+                localItems.map { index.toUiMediaItem(it, isFav = favIds.contains(it.id)) }.toMutableList()
+            } else {
+                MediaRepository.getMediaForCategory(currentCategory).toMutableList()
+            }
+
+            adapter.updateData(mediaItems)
+
             val unit = if (currentCategory.equals("Videos", ignoreCase = true)) "videos" else "items"
-            binding.tvAlbumDetailCount.text = "${mediaItems.size} $unit · Pi Zero 2 W SSD"
+            binding.tvAlbumDetailCount.text = "${mediaItems.size} $unit"
+
+            val isTrash = currentCategory.equals("Trash", ignoreCase = true)
+            binding.layoutTrashBanner.visibility = if (isTrash && mediaItems.isNotEmpty()) View.VISIBLE else View.GONE
+            binding.btnEmptyTrash.visibility = if (isTrash && mediaItems.isNotEmpty()) View.VISIBLE else View.GONE
+            binding.btnSelect.visibility = if (isTrash && mediaItems.isEmpty()) View.GONE else View.VISIBLE
+
+            if (mediaItems.isEmpty()) {
+                showEmptyState()
+            } else {
+                binding.layoutEmptyState.visibility = View.GONE
+                binding.rvMediaGrid.visibility = View.VISIBLE
+            }
         }
     }
 
@@ -149,7 +181,7 @@ class AlbumDetailActivity : AppCompatActivity() {
             currentCategory.equals("videos", ignoreCase = true) -> {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_video_cam)
                 binding.tvEmptyTitle.text = "No Videos Found"
-                binding.tvEmptySubtitle.text = "Videos recorded on your phone will automatically sync and stream directly from the SSD without transcoding."
+                binding.tvEmptySubtitle.text = "Videos on your device will appear here."
                 binding.btnEmptyAction.text = "Return to Albums"
                 binding.btnEmptyAction.setOnClickListener { finish() }
             }
@@ -176,7 +208,7 @@ class AlbumDetailActivity : AppCompatActivity() {
         binding.btnEmptyTrash.setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("Empty Trash?")
-                .setMessage("All items in Trash will be permanently deleted from your Raspberry Pi Zero 2 W SSD. This action cannot be undone.")
+                .setMessage("All items in Trash will be permanently deleted. This action cannot be undone.")
                 .setPositiveButton("Empty Trash") { _, _ ->
                     val purged = MediaRepository.emptyTrash()
                     Toast.makeText(this, "Purged $purged items permanently", Toast.LENGTH_SHORT).show()
@@ -217,9 +249,9 @@ class AlbumDetailActivity : AppCompatActivity() {
             val isTrash = currentCategory.equals("Trash", ignoreCase = true)
             val title = if (isTrash) "Permanently Delete $count items?" else "Move $count items to Trash?"
             val msg = if (isTrash) {
-                "These items will be permanently erased from your SSD. This cannot be undone."
+                "These items will be permanently erased. This cannot be undone."
             } else {
-                "Selected items will be moved to Trash on your SSD."
+                "Selected items will be moved to Trash."
             }
             val confirmBtn = if (isTrash) "Delete Permanently" else "Move to Trash"
 
@@ -261,11 +293,15 @@ class AlbumDetailActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_ALBUM_TITLE = "extra_album_title"
         const val EXTRA_ALBUM_COUNT = "extra_album_count"
+        const val EXTRA_BUCKET_ID = "extra_bucket_id"
 
-        fun start(context: Context, title: String, count: String) {
+        fun start(context: Context, title: String, count: String, bucketId: Long = -1L) {
             val intent = Intent(context, AlbumDetailActivity::class.java).apply {
                 putExtra(EXTRA_ALBUM_TITLE, title)
                 putExtra(EXTRA_ALBUM_COUNT, count)
+                if (bucketId != -1L) {
+                    putExtra(EXTRA_BUCKET_ID, bucketId)
+                }
             }
             context.startActivity(intent)
         }

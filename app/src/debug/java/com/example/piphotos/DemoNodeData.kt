@@ -79,7 +79,7 @@ object DemoNodeData {
         NodeRepository.systemReserveGB = 10.0
         NodeRepository.nodeName = DEMO_NODE_NAME
         NodeRepository.deviceModel = DEMO_DEVICE_MODEL
-        NodeRepository.tailscaleDomain = DEMO_TAILSCALE_DOMAIN
+        NodeRepository.remoteNodeDomain = DEMO_TAILSCALE_DOMAIN
         NodeRepository.remoteEndpoint = DEMO_REMOTE_ENDPOINT
         NodeRepository.clearPendingInvites()
         NodeRepository.setUsers(createDemoUsers())

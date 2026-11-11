@@ -5,6 +5,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
+import coil.load
 import com.example.piphotos.databinding.ItemMediaTileBinding
 
 class MediaGridAdapter(
@@ -58,7 +59,17 @@ class MediaGridAdapter(
         RecyclerView.ViewHolder(binding.root) {
 
         fun bind(item: MediaItem) {
-            binding.ivMediaPhoto.setImageResource(item.drawableRes)
+            if (!item.contentUri.isNullOrEmpty()) {
+                binding.ivMediaPhoto.load(item.contentUri) {
+                    crossfade(true)
+                    placeholder(R.color.photo_tile_1)
+                    error(R.color.photo_tile_1)
+                }
+            } else if (item.drawableRes != 0) {
+                binding.ivMediaPhoto.setImageResource(item.drawableRes)
+            } else {
+                binding.ivMediaPhoto.setImageResource(R.color.photo_tile_1)
+            }
 
             if (item.isVideo && !item.duration.isNullOrEmpty()) {
                 binding.layoutVideoBadge.visibility = View.VISIBLE

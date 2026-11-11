@@ -165,13 +165,13 @@
                 </RelativeLayout>
             </LinearLayout>
 
-            <!-- SECTION: Tailscale VPN -->
+            <!-- SECTION: Zero-Trust VPN -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
                 android:layout_marginBottom="8dp"
-                android:text="TAILSCALE ZERO-TRUST VPN"
+                android:text="ZERO-TRUST PRIVATE VPN"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp"
                 android:textStyle="bold" />
@@ -215,11 +215,11 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Assigned Tailscale IP"
+                        android:text="Assigned Private IP"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
                     <TextView
-                        android:id="@+id/tvTailscaleIp"
+                        android:id="@+id/tvPrivateVpnIp"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_alignParentEnd="true"

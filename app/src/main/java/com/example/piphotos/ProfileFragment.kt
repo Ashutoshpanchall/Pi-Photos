@@ -51,7 +51,7 @@ class ProfileFragment : Fragment() {
         }
 
         // Node & Network Preferences
-        binding.rowTailscale.setOnClickListener {
+        binding.rowRemoteNode.setOnClickListener {
             startActivity(Intent(requireContext(), NetworkPreferencesActivity::class.java))
         }
 
@@ -61,11 +61,11 @@ class ProfileFragment : Fragment() {
 
         binding.btnSignOut.setOnClickListener {
             AlertDialog.Builder(requireContext())
-                .setTitle("Sign Out of Node?")
-                .setMessage("This will disconnect this device from your Raspberry Pi Zero 2 W vault over Tailscale. Encrypted offline cache will be retained securely.")
+                .setTitle("Sign Out?")
+                .setMessage("This will sign out of your account on this device.")
                 .setPositiveButton("Sign Out") { _, _ ->
                     NodeRepository.signOut()
-                    Toast.makeText(requireContext(), "Signed out of node. Re-authenticate to access vault.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(requireContext(), "Signed out. Re-authenticate to access your account.", Toast.LENGTH_LONG).show()
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
@@ -121,10 +121,24 @@ class ProfileFragment : Fragment() {
 
     private fun renderUsersList() {
         val b = _binding ?: return
+        val isLocalOnly = MediaRepository.backupState is BackupState.LocalOnly
+        if (isLocalOnly) {
+            b.cardPersonalQuota.visibility = View.GONE
+            b.layoutPeopleSection.visibility = View.GONE
+            b.layoutNodePill.visibility = View.GONE
+            b.rowRemoteNode.visibility = View.GONE
+            b.rowPipeline.visibility = View.GONE
+            b.btnSignOut.visibility = View.GONE
+            b.cardProfilePiOptIn.visibility = View.VISIBLE
+            b.containerUsersList.removeAllViews()
+            return
+        }
+
         val users = NodeRepository.getUsers()
         b.layoutPeopleSection.visibility = if (users.isNotEmpty()) View.VISIBLE else View.GONE
         b.layoutNodePill.visibility = if (NodeRepository.nodeName.isNotEmpty()) View.VISIBLE else View.GONE
-        b.rowTailscale.visibility = if (NodeRepository.tailscaleDomain.isNotEmpty()) View.VISIBLE else View.GONE
+        b.rowRemoteNode.visibility = if (NodeRepository.remoteNodeDomain.isNotEmpty()) View.VISIBLE else View.GONE
+        b.rowPipeline.visibility = if (NodeRepository.nodeName.isNotEmpty()) View.VISIBLE else View.GONE
         b.btnSignOut.visibility = if (users.isNotEmpty()) View.VISIBLE else View.GONE
 
         val container = b.containerUsersList
@@ -192,7 +206,7 @@ class ProfileFragment : Fragment() {
                         } else {
                             AlertDialog.Builder(requireContext())
                                 .setTitle("Remove $userName?")
-                                .setMessage("Revoke Tailscale access and purge ${user.usedGB} GB of encrypted media from Pi SSD?")
+                                .setMessage("Revoke access and purge ${user.usedGB} GB of encrypted media?")
                                 .setPositiveButton("Remove") { _, _ ->
                                     val removed = NodeRepository.removeUser(userId)
                                     if (removed) {

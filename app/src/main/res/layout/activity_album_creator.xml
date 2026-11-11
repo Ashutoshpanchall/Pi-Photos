@@ -162,7 +162,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Album is stored zero-knowledge on the Raspberry Pi Zero 2 W SSD. Metadata is encrypted before leaving the device."
+                    android:text="Albums are stored privately on your device."
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
             </LinearLayout>

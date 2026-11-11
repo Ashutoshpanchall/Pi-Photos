@@ -38,7 +38,7 @@ class AlbumCreatorActivity : AppCompatActivity() {
             }
 
             MediaRepository.addCustomAlbum(title)
-            Toast.makeText(this, "Album \"$title\" created and synced to SSD!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Album \"$title\" created!", Toast.LENGTH_SHORT).show()
             finish()
         }
     }

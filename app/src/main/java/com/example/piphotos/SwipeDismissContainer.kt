@@ -123,11 +123,11 @@ class SwipeDismissContainer @JvmOverloads constructor(
                     val yVelocity = velocityTracker?.yVelocity ?: 0f
 
                     // Snappy dismiss thresholds: quick flick or >8% screen distance (~60-180px)
-                    val dismissDistanceThreshold = (height * 0.08f).coerceIn(60f, 180f)
+                    val dismissHeightThreshold = (height * 0.08f).coerceIn(60f, 180f)
                     val isFlingDismiss = yVelocity > minFlingVelocity && translationY > 20f
-                    val isDistanceDismiss = translationY > dismissDistanceThreshold
+                    val isHeightDismiss = translationY > dismissHeightThreshold
 
-                    if (isFlingDismiss || isDistanceDismiss) {
+                    if (isFlingDismiss || isHeightDismiss) {
                         animateDismiss()
                     } else {
                         animateReset()

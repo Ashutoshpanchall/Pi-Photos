@@ -2,14 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Core App & Network Permissions -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission
-        android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="s" />
+    <!-- NOTE: Permissions to restore during NAS/Backup phase:
+         android.permission.INTERNET
+         android.permission.ACCESS_NETWORK_STATE
+         android.permission.ACCESS_WIFI_STATE
+         android.permission.NEARBY_WIFI_DEVICES
+         android.permission.POST_NOTIFICATIONS
+         android.permission.FOREGROUND_SERVICE
+         android.permission.FOREGROUND_SERVICE_DATA_SYNC
+    -->
 
     <!-- Media Storage Permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -18,11 +19,6 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-
-    <!-- Background Sync & Notification Permissions -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:allowBackup="false"

@@ -27,7 +27,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
-        android:text="Select phone storage folders to automatically sync with your Raspberry Pi SSD."
+        android:text="Select device storage folders to back up."
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 

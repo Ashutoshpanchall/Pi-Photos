@@ -4,11 +4,9 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class FavoritesRepository(private val context: Context) {
+class FavoritesRepository(private val dao: FavoriteDao) {
 
-    private val dao by lazy {
-        AppDatabase.getInstance(context).favoriteDao()
-    }
+    constructor(context: Context) : this(AppDatabase.getInstance(context).favoriteDao())
 
     suspend fun getAllFavoriteIds(): Set<Long> = withContext(Dispatchers.IO) {
         dao.allFavoriteIds.toSet()

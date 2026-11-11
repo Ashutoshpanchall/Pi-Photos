@@ -4,7 +4,6 @@ import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
-import android.os.Build
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
@@ -64,12 +63,20 @@ class MediaStoreScanner(private val context: Context) {
                 val id = cursor.getLong(idCol)
                 val mediaType = if (mediaTypeCol >= 0) cursor.getInt(mediaTypeCol) else MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE
                 val isVideo = mediaType == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
-                val mimeType = if (mimeTypeCol >= 0) cursor.getString(mimeTypeCol) ?: (if (isVideo) "video/*" else "image/*") else ""
+                val rawMime = if (mimeTypeCol >= 0) cursor.getString(mimeTypeCol) ?: (if (isVideo) "video/*" else "image/*") else (if (isVideo) "video/*" else "image/*")
+                val mimeType = rawMime.intern()
                 val dateTaken = if (dateTakenCol >= 0) cursor.getLong(dateTakenCol) else 0L
                 val dateAdded = if (dateAddedCol >= 0) cursor.getLong(dateAddedCol) else 0L
                 val dateModified = if (dateModifiedCol >= 0) cursor.getLong(dateModifiedCol) else 0L
-                val bucketId = if (bucketIdCol >= 0) cursor.getString(bucketIdCol) ?: "unknown" else "unknown"
-                val bucketName = if (bucketNameCol >= 0) cursor.getString(bucketNameCol) ?: "Default" else "Default"
+                val bucketId = if (bucketIdCol >= 0) {
+                    try {
+                        cursor.getLong(bucketIdCol)
+                    } catch (_: Exception) {
+                        cursor.getString(bucketIdCol)?.toLongOrNull() ?: 0L
+                    }
+                } else 0L
+                val rawBucketName = if (bucketNameCol >= 0) cursor.getString(bucketNameCol) ?: "Default" else "Default"
+                val bucketName = rawBucketName.intern()
                 val duration = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
                 val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
                 val generation = if (genModifiedCol >= 0) cursor.getLong(genModifiedCol) else 0L

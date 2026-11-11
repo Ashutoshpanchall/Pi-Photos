@@ -86,7 +86,7 @@
                     android:id="@+id/tvVideoMeta"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="1080p 60fps · Tailscale Stream"
+                    android:text="1080p 60fps"
                     android:textColor="#B3FFFFFF"
                     android:textSize="12sp" />
             </LinearLayout>
@@ -148,7 +148,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_centerHorizontal="true"
-                android:text="Direct SSD Stream · Low Power"
+                android:text="Direct Playback"
                 android:textColor="#99FFFFFF"
                 android:textSize="11sp" />
 

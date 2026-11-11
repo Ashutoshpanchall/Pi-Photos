@@ -27,7 +27,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
-        android:text="Select an album or create a new collection on your Pi Zero 2 W SSD."
+        android:text="Select an album or create a new collection."
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 

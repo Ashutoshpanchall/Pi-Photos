@@ -93,7 +93,7 @@ class AddToAlbumBottomSheet(
         }
 
         val tvSubtitle = TextView(context).apply {
-            text = "$count photos · Pi SSD"
+            text = "$count photos"
             textSize = 12f
             setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
         }
@@ -127,7 +127,7 @@ class AddToAlbumBottomSheet(
 
         AlertDialog.Builder(requireContext())
             .setTitle("New Album")
-            .setMessage("Create a new encrypted photo album on your Pi Zero 2 W.")
+            .setMessage("Create a new photo album.")
             .setView(input)
             .setPositiveButton("Create & Add") { _, _ ->
                 val name = input.text.toString().trim()

@@ -10,6 +10,7 @@ import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import coil.load
 
 class PhotoPagerAdapter(
     private var items: List<MediaItem>,
@@ -102,7 +103,15 @@ class PhotoPagerAdapter(
         }
 
         fun bind(item: MediaItem, controlsVisible: Boolean) {
-            zoomImageView.setImageResource(item.drawableRes)
+            if (!item.contentUri.isNullOrEmpty()) {
+                zoomImageView.load(item.contentUri) {
+                    crossfade(true)
+                }
+            } else if (item.drawableRes != 0) {
+                zoomImageView.setImageResource(item.drawableRes)
+            } else {
+                zoomImageView.setImageResource(R.color.photo_tile_1)
+            }
             zoomImageView.resetZoom()
             zoomImageView.onSingleTapListener = onSingleTap
 

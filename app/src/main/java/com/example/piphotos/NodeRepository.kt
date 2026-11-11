@@ -11,7 +11,7 @@ data class NodeUser(
     var usedGB: Double,
     var isActive: Boolean = true,
     var lastActive: String = "Online now",
-    var photosCount: Int = 1204,
+    var photosCount: Int = 0,
     var videosCount: Int = 38,
     var vaultCount: Int = 6
 )
@@ -55,7 +55,7 @@ object NodeRepository {
     // Configurable Node Metadata (defaults empty in local-only mode)
     var nodeName: String = ""
     var deviceModel: String = ""
-    var tailscaleDomain: String = ""
+    var remoteNodeDomain: String = ""
     var remoteEndpoint: String = ""
     var cpuSpec: String = ""
     var ramSpec: String = ""
@@ -63,9 +63,9 @@ object NodeRepository {
     var storagePath: String = ""
 
     // Backward compatibility getters for existing screens before G7
-    val NODE_NAME: String get() = nodeName.ifEmpty { "Pi Vault Node" }
-    val DEVICE_MODEL: String get() = deviceModel.ifEmpty { "Raspberry Pi Node" }
-    val TAILSCALE_DOMAIN: String get() = tailscaleDomain.ifEmpty { "vault.local" }
+    val NODE_NAME: String get() = nodeName.ifEmpty { "Vault Node" }
+    val DEVICE_MODEL: String get() = deviceModel.ifEmpty { "Storage Node" }
+    val REMOTE_DOMAIN: String get() = remoteNodeDomain.ifEmpty { "vault.local" }
     val REMOTE_ENDPOINT: String get() = remoteEndpoint.ifEmpty { "https://vault.local" }
 
     // Storage Sizing (Dynamic: Defaults to 0 GB in local-only mode)
@@ -112,7 +112,7 @@ object NodeRepository {
 
     /**
      * Dynamically generates intelligent storage presets for modifying an existing user's quota.
-     * Computes optimal targets based on N users and total SSD size.
+     * Computes optimal targets based on N users and total storage size.
      */
     fun getDynamicPresetsForUser(userId: String): List<StoragePreset> {
         val user = getUser(userId) ?: return emptyList()
@@ -127,7 +127,7 @@ object NodeRepository {
         }
 
         return listOf(
-            StoragePreset("equal", "Equal (${equalSplit.toInt()}G)", equalSplit, "Equal 1/$n of SSD pool"),
+            StoragePreset("equal", "Equal (${equalSplit.toInt()}G)", equalSplit, "Equal 1/$n of storage pool"),
             StoragePreset("fair", "Fair (${fairShare.toInt()}G)", fairShare, "Usage + proportional free pool"),
             StoragePreset("tier", if (user.role.equals("Admin", true)) "Admin Tier" else "Member Tier", tierShare, "Role weighted headroom"),
             StoragePreset("max", "Max Free", maxSafe, "All unallocated capacity")
@@ -244,7 +244,7 @@ object NodeRepository {
                 summaryMessage = "Rebalanced from unused headroom: $userDeltasStr. Stored files remain untouched."
             )
         } else {
-            // Case C: Exceeds total SSD capacity even after taking all other unused buffers (Over-commit)
+            // Case C: Exceeds total storage capacity even after taking all other unused buffers (Over-commit)
             val overCommit = excess - totalUnusedAcrossOthers
             val cutoffs = mutableMapOf<String, Double>()
             val newQuotas = mutableMapOf<String, Double>()
@@ -266,7 +266,7 @@ object NodeRepository {
                 newUserQuotas = newQuotas,
                 isOverAllocated = true,
                 overAllocatedByGB = overCommit,
-                summaryMessage = "⚠️ Over-allocates node by ${String.format("%.1f", overCommit)} GB. SSD writes will be soft-capped if users upload concurrently."
+                summaryMessage = "⚠️ Over-allocates node by ${String.format("%.1f", overCommit)} GB. Storage writes will be soft-capped if users upload concurrently."
             )
         }
     }

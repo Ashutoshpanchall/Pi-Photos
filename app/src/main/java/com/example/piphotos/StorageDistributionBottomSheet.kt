@@ -65,7 +65,7 @@ class StorageDistributionBottomSheet(
         val unallocated = NodeRepository.getUnallocatedCapacityGB()
         val isOverAllocated = NodeRepository.isOverAllocated()
 
-        binding.tvSheetSubtitle.text = "${String.format("%.1f", NodeRepository.totalDiskGB)} GB Attached SSD · $n Users Managed"
+        binding.tvSheetSubtitle.text = "${String.format("%.1f", NodeRepository.totalDiskGB)} GB Attached Storage · $n Users Managed"
         binding.tvSummaryAllocated.text = "${String.format("%.1f", totalAllocated)} GB Allocated"
         binding.tvSummaryUnallocated.text = "${String.format("%.1f", unallocated)} GB Free Pool"
 
@@ -76,7 +76,7 @@ class StorageDistributionBottomSheet(
             val overGB = NodeRepository.getOverAllocatedGB()
             val overPercent = NodeRepository.getOverAllocatedPercent()
             binding.layoutOverAllocatedWarning.visibility = View.VISIBLE
-            binding.tvOverAllocatedText.text = "⚠️ Over-allocated by ${String.format("%.1f", overGB)} GB ($overPercent% of usable SSD)"
+            binding.tvOverAllocatedText.text = "⚠️ Over-allocated by ${String.format("%.1f", overGB)} GB ($overPercent% of usable storage)"
             binding.pbSheetAllocation.progressTintList = ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.status_red))
         } else {
             binding.layoutOverAllocatedWarning.visibility = View.GONE

@@ -252,7 +252,7 @@
                 android:layout_marginTop="20dp"
                 android:background="@drawable/bg_invite_button"
                 android:gravity="center"
-                android:text="Generate Tailscale Token &amp; QR"
+                android:text="Generate Invite Token &amp; QR"
                 android:textColor="@color/primary_blue"
                 android:textSize="15sp"
                 android:textStyle="bold" />

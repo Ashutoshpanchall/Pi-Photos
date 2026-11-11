@@ -33,7 +33,7 @@ class NetworkPreferencesActivity : AppCompatActivity() {
         }
 
         binding.btnNetworkRefresh.setOnClickListener {
-            Toast.makeText(this, "Checking network latency & Tailscale status...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Checking network latency & VPN status...", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnCopyEndpoint.setOnClickListener {
@@ -44,7 +44,7 @@ class NetworkPreferencesActivity : AppCompatActivity() {
         }
 
         binding.btnTestEndpoint.setOnClickListener {
-            Toast.makeText(this, "Tailscale handshake OK (RTT: 4.2ms) · TLS 1.3 Active", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "VPN handshake OK (RTT: 4.2ms) · TLS 1.3 Active", Toast.LENGTH_LONG).show()
         }
     }
 }

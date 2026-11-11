@@ -36,7 +36,7 @@ class InviteUserActivity : AppCompatActivity() {
             finish()
         }
 
-        binding.tvInviteAvailableCapacity.text = "${String.format("%.1f", NodeRepository.getUnallocatedCapacityGB())} GB Free of ${String.format("%.0f", NodeRepository.totalDiskGB)} GB SSD"
+        binding.tvInviteAvailableCapacity.text = "${String.format("%.1f", NodeRepository.getUnallocatedCapacityGB())} GB Free of ${String.format("%.0f", NodeRepository.totalDiskGB)} GB Storage"
 
         setupQuotaPresets()
 
@@ -132,7 +132,7 @@ class InviteUserActivity : AppCompatActivity() {
             quotaGB = effectiveQuota
         )
 
-        generatedInviteUrl = "https://${NodeRepository.TAILSCALE_DOMAIN}/invite?token=${invite.token}"
+        generatedInviteUrl = "https://${NodeRepository.REMOTE_DOMAIN}/invite?token=${invite.token}"
         binding.tvInviteUrl.text = generatedInviteUrl
         binding.layoutInviteResult.visibility = View.VISIBLE
 

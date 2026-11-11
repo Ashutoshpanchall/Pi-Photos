@@ -64,7 +64,7 @@
     <string name="folder_screenshots_path">Pictures/Screenshots</string>
     <string name="status_paused">Paused</string>
     <string name="section_attention_required">ATTENTION REQUIRED</string>
-    <string name="error_file">IMG_20260618_0921.jpg</string>
+    <string name="error_file">--</string>
     <string name="error_reason">Network timeout · Read error</string>
     <string name="action_retry">Retry</string>
     <string name="backup_footer_title">Encrypted Local Storage</string>
@@ -91,14 +91,14 @@
     <string name="action_invite_user">+ Invite User</string>
     <string name="people_footnote">Other users\' vaults are cryptographically isolated and never visible.</string>
     <string name="section_node_preferences">NODE &amp; NETWORK PREFERENCES</string>
-    <string name="pref_tailscale">Tailscale VPN Node</string>
-    <string name="pref_tailscale_val">Not Connected</string>
+    <string name="pref_remote_node">Remote Node</string>
+    <string name="pref_remote_node_val">Not Connected</string>
     <string name="pref_appearance">Appearance</string>
     <string name="pref_appearance_light">Light</string>
     <string name="pref_appearance_dark">Dark</string>
-    <string name="pref_pipeline">Low-Power Pipeline (Pi Zero)</string>
+    <string name="pref_pipeline">Low-Power Pipeline</string>
     <string name="pref_pipeline_val">Active (1 thread)</string>
-    <string name="action_sign_out">Sign Out of Vault</string>
+    <string name="action_sign_out">Sign Out</string>
     <string name="profile_footer_version">PiPhotos v1.0 · Local-First Gallery</string>
 
     <!-- Accessibility Content Descriptions -->

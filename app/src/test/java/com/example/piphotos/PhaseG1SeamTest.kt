@@ -21,7 +21,7 @@ class PhaseG1SeamTest {
         NodeRepository.systemReserveGB = 0.0
         NodeRepository.nodeName = ""
         NodeRepository.deviceModel = ""
-        NodeRepository.tailscaleDomain = ""
+        NodeRepository.remoteNodeDomain = ""
     }
 
     @Test
@@ -99,7 +99,7 @@ class PhaseG1SeamTest {
         assertTrue(NodeRepository.getPendingInvites().isEmpty())
         assertEquals(0.0, NodeRepository.totalDiskGB, 0.01)
         assertEquals("", NodeRepository.nodeName)
-        assertEquals("", NodeRepository.tailscaleDomain)
+        assertEquals("", NodeRepository.remoteNodeDomain)
     }
 
     @Test
