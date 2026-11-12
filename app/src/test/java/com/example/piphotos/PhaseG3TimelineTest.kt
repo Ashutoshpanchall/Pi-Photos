@@ -13,6 +13,8 @@ import com.example.piphotos.media.TimelineGrouper
 import com.example.piphotos.media.TimelineRow
 import com.example.piphotos.media.TimelineStateMachine
 import com.example.piphotos.media.TimelineUiState
+import com.example.piphotos.media.toEntity
+import com.example.piphotos.media.toLocalMediaItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -197,5 +199,30 @@ class PhaseG3TimelineTest {
         // 5. Filter year "2026"
         val yearResult = TimelineStateMachine.filterByQuery(items, "2026", emptySet())
         assertEquals(2, yearResult.size)
+    }
+
+    @Test
+    fun mediaIndexEntity_mappingAndRoundTrip_preservesAllFields() {
+        val original = createMediaItem(
+            id = 42L,
+            timestampMs = 1794355200000L,
+            isVideo = true,
+            bucketName = "Vacation",
+            mimeType = "video/mp4"
+        )
+        val entity = original.toEntity()
+        assertEquals(42L, entity.id)
+        assertTrue(entity.isVideo)
+        assertEquals("video/mp4", entity.mimeType)
+        assertEquals(1794355200000L, entity.dateTakenMs)
+        assertEquals("Vacation", entity.bucketName)
+
+        val restored = entity.toLocalMediaItem()
+        assertEquals(original.id, restored.id)
+        assertEquals(original.isVideo, restored.isVideo)
+        assertEquals(original.mimeType, restored.mimeType)
+        assertEquals(original.dateTakenMs, restored.dateTakenMs)
+        assertEquals(original.bucketName, restored.bucketName)
+        assertEquals(original.effectiveDateMs, restored.effectiveDateMs)
     }
 }

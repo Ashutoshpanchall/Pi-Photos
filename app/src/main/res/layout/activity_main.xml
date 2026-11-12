@@ -8,6 +8,17 @@
     android:background="@color/bg_page"
     tools:context=".MainActivity">
 
+    <!-- Material 3 Navigation Rail (Hidden on standard phones, active on tablets) -->
+    <com.google.android.material.navigationrail.NavigationRailView
+        android:id="@+id/navigationRail"
+        android:layout_width="wrap_content"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:menu="@menu/bottom_nav_menu" />
+
     <!-- Fragment Container -->
     <FrameLayout
         android:id="@+id/fragmentContainer"

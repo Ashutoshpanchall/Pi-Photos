@@ -9,14 +9,15 @@ import androidx.room.migration.Migration;
 import androidx.sqlite.db.SupportSQLiteDatabase;
 
 @Database(
-    entities = {FavoriteEntity.class, AlbumEntity.class, AlbumItemEntity.class},
-    version = 2,
+    entities = {FavoriteEntity.class, AlbumEntity.class, AlbumItemEntity.class, MediaIndexEntity.class},
+    version = 3,
     exportSchema = false
 )
 public abstract class AppDatabase extends RoomDatabase {
 
     public abstract FavoriteDao favoriteDao();
     public abstract AlbumDao albumDao();
+    public abstract MediaIndexDao mediaIndexDao();
 
     public static final Migration MIGRATION_1_2 = new Migration(1, 2) {
         @Override
@@ -31,6 +32,26 @@ public abstract class AppDatabase extends RoomDatabase {
         }
     };
 
+    public static final Migration MIGRATION_2_3 = new Migration(2, 3) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            database.execSQL("CREATE TABLE IF NOT EXISTS `media_index` ("
+                + "`id` INTEGER NOT NULL, "
+                + "`is_video` INTEGER NOT NULL, "
+                + "`mime_type` TEXT, "
+                + "`date_taken_ms` INTEGER NOT NULL, "
+                + "`date_added_sec` INTEGER NOT NULL, "
+                + "`date_modified_sec` INTEGER NOT NULL, "
+                + "`bucket_id` INTEGER NOT NULL, "
+                + "`bucket_name` TEXT, "
+                + "`size_bytes` INTEGER NOT NULL, "
+                + "`duration_ms` INTEGER NOT NULL, "
+                + "`generation_modified` INTEGER NOT NULL, "
+                + "PRIMARY KEY(`id`))");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_media_index_date_taken_ms_date_modified_sec` ON `media_index` (`date_taken_ms`, `date_modified_sec`)");
+        }
+    };
+
     private static volatile AppDatabase INSTANCE;
 
     public static AppDatabase getInstance(Context context) {
@@ -42,7 +63,7 @@ public abstract class AppDatabase extends RoomDatabase {
                         AppDatabase.class,
                         "piphotos_local.db"
                     )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .addCallback(new Callback() {
                         @Override
                         public void onOpen(@NonNull SupportSQLiteDatabase db) {

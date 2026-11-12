@@ -9,7 +9,9 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import com.example.piphotos.FolderItem
+import com.example.piphotos.db.AppDatabase
 import com.example.piphotos.db.FavoritesRepository
+import com.example.piphotos.db.MediaIndexEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,6 +33,8 @@ class LocalMediaIndex(private val appContext: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val scanner = MediaStoreScanner(appContext)
     val favoritesRepo = FavoritesRepository(appContext)
+    private val db = AppDatabase.getInstance(appContext)
+    private val prefs = appContext.getSharedPreferences("piphotos_index_meta", Context.MODE_PRIVATE)
 
     private val mutex = Mutex()
 
@@ -55,6 +59,29 @@ class LocalMediaIndex(private val appContext: Context) {
 
     private var debounceJob: Job? = null
     private var isObserverRegistered = false
+
+    init {
+        lastGeneration = prefs.getLong("last_generation", 0L)
+        lastVersion = prefs.getString("last_version", "") ?: ""
+
+        // Fast cold-start recovery: load from Room cache immediately!
+        scope.launch {
+            mutex.withLock {
+                if (items.isEmpty()) {
+                    val cachedEntities = db.mediaIndexDao().all
+                    if (cachedEntities.isNotEmpty()) {
+                        val cachedItems = cachedEntities.map { it.toLocalMediaItem() }
+                        items.ensureCapacity(cachedItems.size)
+                        items.addAll(cachedItems)
+                        revision++
+                        val copied = ArrayList(items)
+                        _mediaFlow.value = copied
+                        _indexStateFlow.value = IndexState.Ready(copied, revision)
+                    }
+                }
+            }
+        }
+    }
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
@@ -116,6 +143,15 @@ class LocalMediaIndex(private val appContext: Context) {
         lastGeneration = stats.generation
         lastVersion = stats.mediaStoreVersion
 
+        // Persist to Room & SharedPreferences
+        val entities = scannedItems.map { it.toEntity() }
+        db.mediaIndexDao().clearAll()
+        db.mediaIndexDao().insertAll(entities)
+        prefs.edit()
+            .putLong("last_generation", lastGeneration)
+            .putString("last_version", lastVersion)
+            .apply()
+
         revision++
         val copied = ArrayList(items)
         _mediaFlow.value = copied
@@ -138,6 +174,18 @@ class LocalMediaIndex(private val appContext: Context) {
             // 1. Detect and prune deletions & fetch modified/new items
             val activeIds = scanner.queryActiveIds()
             val modifiedItems = scanner.performDeltaScan(lastGeneration)
+
+            // Sync database with delta changes
+            if (activeIds.isNotEmpty()) {
+                val removedIds = items.filter { !activeIds.contains(it.id) }.map { it.id }
+                if (removedIds.isNotEmpty()) {
+                    db.mediaIndexDao().deleteByIds(removedIds)
+                }
+            }
+            if (modifiedItems.isNotEmpty()) {
+                db.mediaIndexDao().insertAll(modifiedItems.map { it.toEntity() })
+            }
+
             val hasChanged = IndexDeltaApplier.applyDelta(items, activeIds, modifiedItems)
 
             if (hasChanged || _indexStateFlow.value !is IndexState.Ready) {
@@ -150,6 +198,11 @@ class LocalMediaIndex(private val appContext: Context) {
             val newMaxGen = modifiedItems.maxOfOrNull { it.generationModified } ?: lastGeneration
             lastGeneration = maxOf(lastGeneration, newMaxGen)
             lastVersion = currentVersion
+
+            prefs.edit()
+                .putLong("last_generation", lastGeneration)
+                .putString("last_version", lastVersion)
+                .apply()
 
             val elapsed = SystemClock.elapsedRealtime() - startTime
 
@@ -257,3 +310,36 @@ object IndexDeltaApplier {
         return removedAny || addedOrModified
     }
 }
+
+fun MediaIndexEntity.toLocalMediaItem(): LocalMediaItem {
+    return LocalMediaItem(
+        id = id,
+        isVideo = isVideo,
+        mimeType = mimeType ?: if (isVideo) "video/mp4" else "image/jpeg",
+        dateTakenMs = dateTakenMs,
+        dateAddedSec = dateAddedSec,
+        dateModifiedSec = dateModifiedSec,
+        bucketId = bucketId,
+        bucketName = bucketName ?: "",
+        durationMs = durationMs,
+        sizeBytes = sizeBytes,
+        generationModified = generationModified
+    )
+}
+
+fun LocalMediaItem.toEntity(): MediaIndexEntity {
+    return MediaIndexEntity(
+        id,
+        isVideo,
+        mimeType,
+        dateTakenMs,
+        dateAddedSec,
+        dateModifiedSec,
+        bucketId,
+        bucketName,
+        sizeBytes,
+        durationMs,
+        generationModified
+    )
+}
+

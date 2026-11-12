@@ -49,8 +49,11 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
             val systemNavBars = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
             val effectiveNavBarBottom = maxOf(navBars, systemNavBars)
 
+            val leftInset = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()).left
+
             binding.fragmentContainer.setPadding(0, effectiveStatusBarTop, 0, 0)
             binding.bottomNavigation.setPadding(0, 0, 0, effectiveNavBarBottom)
+            binding.navigationRail.setPadding(leftInset, effectiveStatusBarTop, 0, effectiveNavBarBottom)
             insets
         }
 
@@ -67,9 +70,11 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
             currentTabId = savedInstanceState.getInt(KEY_CURRENT_TAB, R.id.navigation_photos)
         }
 
+        val isWide = resources.configuration.screenWidthDp >= 600
         val hasAccess = PermissionHelper.hasAnyMediaAccess(this)
         if (!hasAccess) {
             binding.bottomNavigation.visibility = View.GONE
+            binding.navigationRail.visibility = View.GONE
             val existingWelcome = supportFragmentManager.findFragmentByTag(TAG_WELCOME)
             if (existingWelcome == null) {
                 supportFragmentManager.beginTransaction()
@@ -78,13 +83,15 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
             }
             setupBackNavigation()
         } else {
-            binding.bottomNavigation.visibility = View.VISIBLE
+            binding.bottomNavigation.visibility = if (isWide) View.GONE else View.VISIBLE
+            binding.navigationRail.visibility = if (isWide) View.VISIBLE else View.GONE
             setupFragments(savedInstanceState)
             setupBottomNavigation()
             setupBackNavigation()
 
             if (savedInstanceState != null) {
                 binding.bottomNavigation.selectedItemId = currentTabId
+                binding.navigationRail.selectedItemId = currentTabId
             } else {
                 lifecycleScope.launch {
                     LocalMediaIndex.getInstance(applicationContext).rebuildIndex()
@@ -100,7 +107,9 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
             fm.beginTransaction().remove(welcome).commitNow()
         }
         if (granted || isPartial) {
-            binding.bottomNavigation.visibility = View.VISIBLE
+            val isWide = resources.configuration.screenWidthDp >= 600
+            binding.bottomNavigation.visibility = if (isWide) View.GONE else View.VISIBLE
+            binding.navigationRail.visibility = if (isWide) View.VISIBLE else View.GONE
             setupFragments(null)
             setupBottomNavigation()
             lifecycleScope.launch {
@@ -162,6 +171,7 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
                 if (currentTabId != R.id.navigation_photos) {
                     binding.bottomNavigation.selectedItemId = R.id.navigation_photos
+                    binding.navigationRail.selectedItemId = R.id.navigation_photos
                 } else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -183,7 +193,9 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
             val welcome = fm.findFragmentByTag(TAG_WELCOME)
             if (welcome != null) {
                 fm.beginTransaction().remove(welcome).commitAllowingStateLoss()
-                binding.bottomNavigation.visibility = View.VISIBLE
+                val isWide = resources.configuration.screenWidthDp >= 600
+                binding.bottomNavigation.visibility = if (isWide) View.GONE else View.VISIBLE
+                binding.navigationRail.visibility = if (isWide) View.VISIBLE else View.GONE
                 lifecycleScope.launch {
                     LocalMediaIndex.getInstance(applicationContext).rebuildIndex()
                 }
@@ -198,6 +210,17 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
     private fun setupBottomNavigation() {
         binding.bottomNavigation.setOnItemSelectedListener { item ->
+            if (binding.navigationRail.selectedItemId != item.itemId) {
+                binding.navigationRail.selectedItemId = item.itemId
+            }
+            switchToTab(item.itemId)
+            true
+        }
+
+        binding.navigationRail.setOnItemSelectedListener { item ->
+            if (binding.bottomNavigation.selectedItemId != item.itemId) {
+                binding.bottomNavigation.selectedItemId = item.itemId
+            }
             switchToTab(item.itemId)
             true
         }

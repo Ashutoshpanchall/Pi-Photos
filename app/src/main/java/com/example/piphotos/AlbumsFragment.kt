@@ -175,10 +175,13 @@ class AlbumsFragment : Fragment() {
 
         val inflater = LayoutInflater.from(requireContext())
         val index = LocalMediaIndex.getInstance(requireContext())
+        val config = resources.configuration
+        val isTabletOrLandscape = config.screenWidthDp >= 600 || config.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val columns = if (isTabletOrLandscape) 4 else 2
 
         // Render device folders
-        val folderPairs = folders.chunked(2)
-        for (pair in folderPairs) {
+        val folderChunks = folders.chunked(columns)
+        for (chunk in folderChunks) {
             val row = LinearLayout(requireContext()).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -190,7 +193,7 @@ class AlbumsFragment : Fragment() {
                 setPadding(dpToPx(16), 0, dpToPx(16), 0)
             }
 
-            for (folder in pair) {
+            for (folder in chunk) {
                 val cardBinding = ItemAlbumCardBinding.inflate(inflater, row, false)
                 if (!folder.coverUri.isNullOrEmpty()) {
                     cardBinding.ivAlbumCover.scaleType = ImageView.ScaleType.CENTER_CROP
@@ -219,13 +222,15 @@ class AlbumsFragment : Fragment() {
                 row.addView(cardBinding.root)
             }
 
-            if (pair.size == 1) {
-                val spacer = View(requireContext()).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f).apply {
-                        setMargins(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            if (chunk.size < columns) {
+                for (i in chunk.size until columns) {
+                    val spacer = View(requireContext()).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f).apply {
+                            setMargins(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+                        }
                     }
+                    row.addView(spacer)
                 }
-                row.addView(spacer)
             }
 
             container.addView(row)
@@ -233,8 +238,8 @@ class AlbumsFragment : Fragment() {
 
         // Render custom Room albums
         if (customAlbums.isNotEmpty()) {
-            val customPairs = customAlbums.chunked(2)
-            for (pair in customPairs) {
+            val customChunks = customAlbums.chunked(columns)
+            for (chunk in customChunks) {
                 val row = LinearLayout(requireContext()).apply {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
@@ -246,7 +251,7 @@ class AlbumsFragment : Fragment() {
                     setPadding(dpToPx(16), 0, dpToPx(16), 0)
                 }
 
-                for (album in pair) {
+                for (album in chunk) {
                     val cardBinding = ItemAlbumCardBinding.inflate(inflater, row, false)
                     val coverItem = if (album.coverMediaStoreId != null) index.getItem(album.coverMediaStoreId) else null
 
@@ -282,13 +287,15 @@ class AlbumsFragment : Fragment() {
                     row.addView(cardBinding.root)
                 }
 
-                if (pair.size == 1) {
-                    val spacer = View(requireContext()).apply {
-                        layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f).apply {
-                            setMargins(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+                if (chunk.size < columns) {
+                    for (i in chunk.size until columns) {
+                        val spacer = View(requireContext()).apply {
+                            layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f).apply {
+                                setMargins(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+                            }
                         }
+                        row.addView(spacer)
                     }
-                    row.addView(spacer)
                 }
 
                 container.addView(row)

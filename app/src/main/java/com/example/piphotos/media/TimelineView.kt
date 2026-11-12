@@ -69,7 +69,7 @@ class TimelineView @JvmOverloads constructor(
             onSelectionChanged = { set -> onSelectionChanged?.invoke(set) }
         )
 
-        gridLayoutManager = GridLayoutManager(context, currentMode.spanCount)
+        gridLayoutManager = GridLayoutManager(context, getAdaptiveSpanCount(currentMode))
         val lookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
                 return when (adapter.getItemViewType(position)) {
@@ -279,11 +279,42 @@ class TimelineView @JvmOverloads constructor(
         return null
     }
 
+    fun getAdaptiveSpanCount(mode: TimelineGroupMode): Int {
+        val config = resources.configuration
+        val screenWidthDp = config.screenWidthDp
+        val isTablet = screenWidthDp >= 600 || config.smallestScreenWidthDp >= 600
+        val isLandscape = config.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+        return when {
+            isTablet -> when (mode) {
+                TimelineGroupMode.DAY -> if (isLandscape) 7 else 5
+                TimelineGroupMode.MONTH -> if (isLandscape) 10 else 8
+                TimelineGroupMode.YEAR -> if (isLandscape) 16 else 12
+            }
+            isLandscape -> when (mode) {
+                TimelineGroupMode.DAY -> 5
+                TimelineGroupMode.MONTH -> 7
+                TimelineGroupMode.YEAR -> 10
+            }
+            else -> mode.spanCount
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration?) {
+        super.onConfigurationChanged(newConfig)
+        val targetSpan = getAdaptiveSpanCount(currentMode)
+        if (gridLayoutManager.spanCount != targetSpan) {
+            val anchorId = getFirstVisibleItemId()
+            gridLayoutManager.spanCount = targetSpan
+            recomputeAndSubmit(anchorItemId = anchorId)
+        }
+    }
+
     fun switchGroupMode(mode: TimelineGroupMode) {
         if (currentMode == mode) return
         val anchorId = getFirstVisibleItemId()
         currentMode = mode
-        gridLayoutManager.spanCount = mode.spanCount
+        gridLayoutManager.spanCount = getAdaptiveSpanCount(mode)
         onModeChanged?.invoke(mode)
         recomputeAndSubmit(anchorItemId = anchorId)
     }
