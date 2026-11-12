@@ -93,11 +93,7 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     private val videoControlsAutoHideRunnable = Runnable {
         if (exoPlayer?.isPlaying == true && areToolbarsVisible) {
-            binding.videoControlsBar.animate()
-                .alpha(0f)
-                .setDuration(220L)
-                .withEndAction { binding.videoControlsBar.visibility = View.GONE }
-                .start()
+            toggleToolbarsVisibility()
         }
     }
 
@@ -203,6 +199,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                     binding.tvCurrentTime.text = formatDuration(currentMs)
                     binding.tvTotalDuration.text = formatDuration(totalMs)
                 }
+                binding.btnVideoPlayPause.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
                 if (isPlaying) {
                     scheduleVideoControlsAutoHide()
                 } else {
@@ -231,7 +228,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                     if (!isUserDraggingFilmstrip) {
                         isSyncingFromPager = true
                         filmstripAdapter.setSelectedPosition(position, binding.rvFilmstrip)
-                        val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
+                        val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
                         FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, position, thumbWidthPx, smooth = true)
                     }
                 }
@@ -257,7 +254,7 @@ class PhotoViewerActivity : AppCompatActivity() {
         val snapHelper = LinearSnapHelper()
         snapHelper.attachToRecyclerView(binding.rvFilmstrip)
 
-        val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
+        val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
         binding.rvFilmstrip.post {
             val padding = FilmstripCenterHelper.computeStartEndPadding(binding.rvFilmstrip.width, thumbWidthPx)
             binding.rvFilmstrip.setPadding(padding, 0, padding, 0)
@@ -353,6 +350,19 @@ class PhotoViewerActivity : AppCompatActivity() {
             }
         })
 
+        binding.btnVideoPlayPause.setOnClickListener {
+            val player = exoPlayer ?: return@setOnClickListener
+            if (player.isPlaying) {
+                player.pause()
+                binding.btnVideoPlayPause.setImageResource(R.drawable.ic_play_arrow)
+                cancelVideoControlsAutoHide()
+            } else {
+                player.play()
+                binding.btnVideoPlayPause.setImageResource(R.drawable.ic_pause)
+                scheduleVideoControlsAutoHide()
+            }
+        }
+
         binding.btnPlaybackSpeed.setOnClickListener {
             val player = exoPlayer ?: return@setOnClickListener
             currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
@@ -402,9 +412,11 @@ class PhotoViewerActivity : AppCompatActivity() {
             if (autoplay) {
                 exoPlayer?.play()
             }
+            binding.btnVideoPlayPause.setImageResource(if (autoplay) R.drawable.ic_pause else R.drawable.ic_play_arrow)
             if (areToolbarsVisible) {
                 binding.videoControlsBar.visibility = View.VISIBLE
                 binding.videoControlsBar.alpha = 1f
+                scheduleVideoControlsAutoHide()
             }
             binding.tvTotalDuration.text = formatDuration(item.durationMs)
             binding.videoSeekBar.max = item.durationMs.toInt()
@@ -631,7 +643,7 @@ class PhotoViewerActivity : AppCompatActivity() {
             adapter.notifyItemRemoved(deletedPos)
             currentPosition = deletedPos.coerceAtMost(mediaItems.size - 1)
             filmstripAdapter.submitList(mediaItems.toList()) {
-                val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
+                val thumbWidthPx = (60 * resources.displayMetrics.density).toInt()
                 FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
             }
             binding.viewPager.setCurrentItem(currentPosition, false)

@@ -1,5 +1,6 @@
 package com.example.piphotos.media
 
+import android.os.CancellationSignal
 import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.View
@@ -7,7 +8,6 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
 import com.example.piphotos.R
 import com.example.piphotos.databinding.ItemMediaTileBinding
 import com.example.piphotos.databinding.ItemTimelineHeaderBinding
@@ -101,6 +101,13 @@ class TimelineAdapter(
         }
     }
 
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        super.onViewRecycled(holder)
+        if (holder is MediaViewHolder) {
+            holder.recycle()
+        }
+    }
+
     fun toggleSelection(id: Long) {
         when (val result = selectionState.toggle(id)) {
             is SelectionState.Result.SingleItemToggled -> {
@@ -180,13 +187,24 @@ class TimelineAdapter(
             }
         }
 
+        private var thumbnailSignal: CancellationSignal? = null
+
         fun bind(item: LocalMediaItem) {
-            // Sized thumbnail with Coil ~320px (never load full res)
-            binding.ivMediaPhoto.load(item.contentUri) {
-                crossfade(true)
-                size(320)
-                placeholder(R.color.surface_card)
-                error(R.color.surface_card)
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
+
+            val cached = ThumbnailLoader.getFromCache(item.id)
+            if (cached != null && !cached.isRecycled) {
+                binding.ivMediaPhoto.setImageBitmap(cached)
+            } else {
+                binding.ivMediaPhoto.setImageResource(R.color.surface_card)
+                thumbnailSignal = ThumbnailLoader.loadThumbnail(
+                    context = binding.root.context,
+                    item = item,
+                    targetSizePx = 280
+                ) { bitmap ->
+                    binding.ivMediaPhoto.setImageBitmap(bitmap)
+                }
             }
 
             // Video badge
@@ -203,6 +221,12 @@ class TimelineAdapter(
             // Selection state
             updateSelection(item.id)
             updateFavorite(item.id)
+        }
+
+        fun recycle() {
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
+            binding.ivMediaPhoto.setImageDrawable(null)
         }
 
         fun updateFavorite(itemId: Long) {

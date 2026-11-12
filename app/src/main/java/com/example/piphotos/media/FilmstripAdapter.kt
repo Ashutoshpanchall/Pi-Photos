@@ -1,6 +1,7 @@
 package com.example.piphotos.media
 
 import android.graphics.Bitmap
+import android.os.CancellationSignal
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -12,9 +13,6 @@ import androidx.dynamicanimation.animation.SpringForce
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
-import coil.request.Disposable
-import coil.size.Scale
 import com.example.piphotos.R
 import java.util.Locale
 
@@ -92,7 +90,7 @@ class FilmstripAdapter(
         private val tvVideoDuration: TextView = itemView.findViewById(R.id.tvVideoDuration)
         private val viewActiveBorder: View = itemView.findViewById(R.id.viewActiveBorder)
 
-        private var currentDisposable: Disposable? = null
+        private var thumbnailSignal: CancellationSignal? = null
         private var scaleXSpring: SpringAnimation? = null
         private var scaleYSpring: SpringAnimation? = null
 
@@ -106,16 +104,22 @@ class FilmstripAdapter(
         }
 
         fun bind(item: LocalMediaItem, isSelected: Boolean) {
-            // Cancel any previous in-flight request to prevent thread pool & memory buildup
-            currentDisposable?.dispose()
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
 
-            // Downsampled lightweight thumbnail (120px, RGB_565 to halve memory footprint)
-            currentDisposable = ivThumbnail.load(item.contentUri) {
-                size(120, 120)
-                scale(Scale.FILL)
-                bitmapConfig(Bitmap.Config.RGB_565)
-                crossfade(false)
-                error(R.color.surface_card)
+            // Instant 60fps cache check or bounded native MediaStore thumbnail decode
+            val cached = ThumbnailLoader.getFromCache(item.id)
+            if (cached != null && !cached.isRecycled) {
+                ivThumbnail.setImageBitmap(cached)
+            } else {
+                ivThumbnail.setImageResource(R.color.surface_card)
+                thumbnailSignal = ThumbnailLoader.loadThumbnail(
+                    context = itemView.context,
+                    item = item,
+                    targetSizePx = 120
+                ) { bitmap ->
+                    ivThumbnail.setImageBitmap(bitmap)
+                }
             }
 
             if (item.isVideo) {
@@ -145,8 +149,8 @@ class FilmstripAdapter(
         }
 
         fun recycle() {
-            currentDisposable?.dispose()
-            currentDisposable = null
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
             scaleXSpring?.cancel()
             scaleYSpring?.cancel()
             ivThumbnail.setImageDrawable(null)

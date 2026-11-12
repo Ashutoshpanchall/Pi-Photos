@@ -3,14 +3,14 @@
     <!-- Dark glass capsule background (#E6161616) -->
     <item>
         <shape android:shape="rectangle">
-            <corners android:radius="14dp" />
+            <corners android:radius="22dp" />
             <solid android:color="#E6161616" />
         </shape>
     </item>
     <!-- Crisp hairline perimeter border (0.5dp, 16% white alpha) -->
     <item>
         <shape android:shape="rectangle">
-            <corners android:radius="14dp" />
+            <corners android:radius="22dp" />
             <stroke
                 android:width="0.5dp"
                 android:color="#29FFFFFF" />
