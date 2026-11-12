@@ -23,3 +23,4 @@ public interface MediaIndexDao {
     @Query("SELECT COUNT(*) FROM media_index")
     int getCount();
 }
+

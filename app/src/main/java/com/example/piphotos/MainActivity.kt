@@ -18,6 +18,7 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
     private lateinit var binding: ActivityMainBinding
     private var currentTabId = R.id.navigation_photos
+    private var isSyncingNav = false
 
     private var activeFragment: Fragment? = null
 
@@ -90,8 +91,11 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
             setupBackNavigation()
 
             if (savedInstanceState != null) {
-                binding.bottomNavigation.selectedItemId = currentTabId
-                binding.navigationRail.selectedItemId = currentTabId
+                if (isWide) {
+                    binding.navigationRail.selectedItemId = currentTabId
+                } else {
+                    binding.bottomNavigation.selectedItemId = currentTabId
+                }
             } else {
                 lifecycleScope.launch {
                     LocalMediaIndex.getInstance(applicationContext).rebuildIndex()
@@ -170,8 +174,12 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
                 }
 
                 if (currentTabId != R.id.navigation_photos) {
-                    binding.bottomNavigation.selectedItemId = R.id.navigation_photos
-                    binding.navigationRail.selectedItemId = R.id.navigation_photos
+                    val isWide = resources.configuration.screenWidthDp >= 600
+                    if (isWide) {
+                        binding.navigationRail.selectedItemId = R.id.navigation_photos
+                    } else {
+                        binding.bottomNavigation.selectedItemId = R.id.navigation_photos
+                    }
                 } else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -210,16 +218,28 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
     private fun setupBottomNavigation() {
         binding.bottomNavigation.setOnItemSelectedListener { item ->
-            if (binding.navigationRail.selectedItemId != item.itemId) {
-                binding.navigationRail.selectedItemId = item.itemId
+            if (isSyncingNav) return@setOnItemSelectedListener true
+            isSyncingNav = true
+            try {
+                if (binding.navigationRail.selectedItemId != item.itemId) {
+                    binding.navigationRail.selectedItemId = item.itemId
+                }
+            } finally {
+                isSyncingNav = false
             }
             switchToTab(item.itemId)
             true
         }
 
         binding.navigationRail.setOnItemSelectedListener { item ->
-            if (binding.bottomNavigation.selectedItemId != item.itemId) {
-                binding.bottomNavigation.selectedItemId = item.itemId
+            if (isSyncingNav) return@setOnItemSelectedListener true
+            isSyncingNav = true
+            try {
+                if (binding.bottomNavigation.selectedItemId != item.itemId) {
+                    binding.bottomNavigation.selectedItemId = item.itemId
+                }
+            } finally {
+                isSyncingNav = false
             }
             switchToTab(item.itemId)
             true
