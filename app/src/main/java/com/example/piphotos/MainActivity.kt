@@ -18,7 +18,6 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
     private lateinit var binding: ActivityMainBinding
     private var currentTabId = R.id.navigation_photos
-    private var isSyncingNav = false
 
     private var activeFragment: Fragment? = null
 
@@ -218,29 +217,11 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
     private fun setupBottomNavigation() {
         binding.bottomNavigation.setOnItemSelectedListener { item ->
-            if (isSyncingNav) return@setOnItemSelectedListener true
-            isSyncingNav = true
-            try {
-                if (binding.navigationRail.selectedItemId != item.itemId) {
-                    binding.navigationRail.selectedItemId = item.itemId
-                }
-            } finally {
-                isSyncingNav = false
-            }
             switchToTab(item.itemId)
             true
         }
 
         binding.navigationRail.setOnItemSelectedListener { item ->
-            if (isSyncingNav) return@setOnItemSelectedListener true
-            isSyncingNav = true
-            try {
-                if (binding.bottomNavigation.selectedItemId != item.itemId) {
-                    binding.bottomNavigation.selectedItemId = item.itemId
-                }
-            } finally {
-                isSyncingNav = false
-            }
             switchToTab(item.itemId)
             true
         }
