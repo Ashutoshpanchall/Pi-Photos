@@ -2,6 +2,7 @@ package com.example.piphotos.media
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
@@ -15,14 +16,18 @@ import java.util.concurrent.Executors
 
 /**
  * High-performance, crash-proof thumbnail loader backed by Android's native
- * [android.content.ContentResolver.loadThumbnail] and an in-memory LRU cache.
+ * [android.content.ContentResolver.loadThumbnail] with resilient [ImageDecoder] fallback
+ * and an in-memory LRU cache.
  *
  * Key guarantees:
  * 1. Bounded thread pool (max 3 concurrent decoders) prevents thread pool & memory exhaustion.
- * 2. Instant cache-hit return (0ms, 0 allocations, 60fps scrolling).
+ * 2. Instant cache-hit return (0ms, 0 allocations, 60fps/120fps scrolling).
  * 3. Uses OS-level pre-rendered thumbnails from MediaStore, avoiding slow MediaMetadataRetriever
  *    for videos and large JPEG decodes for photos.
- * 4. Cooperative [CancellationSignal] immediately terminates OS-level disk reads on view recycle.
+ * 4. Resilient Fallback: If native ContentResolver.loadThumbnail encounters an unseekable stream
+ *    or vendor HEIF pipe error (e.g. "HeifDecoderImpl getSize: not supported!"), cleanly falls
+ *    back to ImageDecoder with a seekable ParcelFileDescriptor.
+ * 5. Cooperative [CancellationSignal] immediately terminates OS-level disk reads on view recycle.
  */
 object ThumbnailLoader {
 
@@ -74,9 +79,14 @@ object ThumbnailLoader {
 
             try {
                 val size = Size(targetSizePx, targetSizePx)
-                val bitmap = appContext.contentResolver.loadThumbnail(item.contentUri, size, signal)
+                val bitmap = try {
+                    appContext.contentResolver.loadThumbnail(item.contentUri, size, signal)
+                } catch (e: Exception) {
+                    if (signal.isCanceled || e is OperationCanceledException) throw e
+                    decodeFallback(appContext, item, targetSizePx, signal)
+                }
 
-                if (!signal.isCanceled) {
+                if (bitmap != null && !signal.isCanceled) {
                     memoryCache.put(item.id, bitmap)
                     mainHandler.post {
                         if (!signal.isCanceled) {
@@ -92,6 +102,31 @@ object ThumbnailLoader {
         }
 
         return signal
+    }
+
+    private fun decodeFallback(
+        context: Context,
+        item: LocalMediaItem,
+        targetSizePx: Int,
+        signal: CancellationSignal
+    ): Bitmap? {
+        if (signal.isCanceled) return null
+        return try {
+            val source = ImageDecoder.createSource {
+                context.contentResolver.openAssetFileDescriptor(item.contentUri, "r", signal)
+                    ?: throw java.io.FileNotFoundException("Cannot open AFD for ${item.contentUri}")
+            }
+            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val maxDim = maxOf(info.size.width, info.size.height)
+                if (maxDim > targetSizePx) {
+                    val sample = (maxDim / targetSizePx).coerceAtLeast(1)
+                    decoder.setTargetSampleSize(sample)
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     fun clearCache() {
