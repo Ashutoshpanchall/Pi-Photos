@@ -11,13 +11,13 @@
     android:clickable="true"
     android:focusable="true">
 
-    <!-- Card container for rounded thumbnail (8dp radius) -->
+    <!-- Floating Window Card (10dp corner radius, original brightness) -->
     <androidx.cardview.widget.CardView
         android:id="@+id/cardThumbnail"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:cardBackgroundColor="@color/surface_card"
-        app:cardCornerRadius="8dp"
+        app:cardCornerRadius="10dp"
         app:cardElevation="0dp">
 
         <ImageView
@@ -61,16 +61,15 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- Semi-transparent Dimming Scrim when unselected -->
+        <!-- Subtle hairline perimeter outline for crisp floating window look -->
         <View
-            android:id="@+id/viewUnselectedScrim"
+            android:id="@+id/viewWindowOutline"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="#66000000"
-            android:visibility="visible" />
+            android:background="@drawable/bg_floating_card_outline" />
     </androidx.cardview.widget.CardView>
 
-    <!-- Active Selection Border (2.5dp crisp white border, 8dp radius) -->
+    <!-- Active Selection Border (2.5dp crisp solid white border, 10dp radius) -->
     <View
         android:id="@+id/viewActiveBorder"
         android:layout_width="match_parent"

@@ -1,5 +1,6 @@
 package com.example.piphotos.media
 
+import android.graphics.Bitmap
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -12,6 +13,7 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.request.Disposable
 import coil.size.Scale
 import com.example.piphotos.R
 import java.util.Locale
@@ -30,15 +32,27 @@ class FilmstripAdapter(
         return getItem(position).id
     }
 
-    fun setSelectedPosition(newPosition: Int) {
+    /**
+     * Updates selection. When [recyclerView] is provided, visible ViewHolders are updated directly
+     * without calling [notifyItemChanged], completely eliminating layout re-computation and
+     * preventing `IllegalStateException: Cannot call this method while RecyclerView is computing a layout or scrolling`.
+     */
+    fun setSelectedPosition(newPosition: Int, recyclerView: RecyclerView? = null) {
         if (selectedPosition == newPosition) return
         val oldPos = selectedPosition
         selectedPosition = newPosition
-        if (oldPos in 0 until itemCount) {
-            notifyItemChanged(oldPos, PAYLOAD_SELECTION)
-        }
-        if (newPosition in 0 until itemCount) {
-            notifyItemChanged(newPosition, PAYLOAD_SELECTION)
+
+        if (recyclerView != null) {
+            // Direct ViewHolder state update: zero notifyItemChanged, 60fps smooth & crash-proof
+            (recyclerView.findViewHolderForAdapterPosition(oldPos) as? ViewHolder)?.updateSelection(isSelected = false, animate = true)
+            (recyclerView.findViewHolderForAdapterPosition(newPosition) as? ViewHolder)?.updateSelection(isSelected = true, animate = true)
+        } else {
+            if (oldPos in 0 until itemCount) {
+                notifyItemChanged(oldPos, PAYLOAD_SELECTION)
+            }
+            if (newPosition in 0 until itemCount) {
+                notifyItemChanged(newPosition, PAYLOAD_SELECTION)
+            }
         }
     }
 
@@ -64,6 +78,11 @@ class FilmstripAdapter(
         }
     }
 
+    override fun onViewRecycled(holder: ViewHolder) {
+        super.onViewRecycled(holder)
+        holder.recycle()
+    }
+
     class ViewHolder(
         itemView: View,
         private val onItemClicked: (Int) -> Unit
@@ -71,9 +90,9 @@ class FilmstripAdapter(
         private val ivThumbnail: ImageView = itemView.findViewById(R.id.ivThumbnail)
         private val layoutVideoBadge: View = itemView.findViewById(R.id.layoutVideoBadge)
         private val tvVideoDuration: TextView = itemView.findViewById(R.id.tvVideoDuration)
-        private val viewUnselectedScrim: View = itemView.findViewById(R.id.viewUnselectedScrim)
         private val viewActiveBorder: View = itemView.findViewById(R.id.viewActiveBorder)
 
+        private var currentDisposable: Disposable? = null
         private var scaleXSpring: SpringAnimation? = null
         private var scaleYSpring: SpringAnimation? = null
 
@@ -87,11 +106,15 @@ class FilmstripAdapter(
         }
 
         fun bind(item: LocalMediaItem, isSelected: Boolean) {
-            // Load appropriately downsampled thumbnail for the filmstrip (~128px)
-            ivThumbnail.load(item.contentUri) {
-                size(128, 128)
+            // Cancel any previous in-flight request to prevent thread pool & memory buildup
+            currentDisposable?.dispose()
+
+            // Downsampled lightweight thumbnail (120px, RGB_565 to halve memory footprint)
+            currentDisposable = ivThumbnail.load(item.contentUri) {
+                size(120, 120)
                 scale(Scale.FILL)
-                crossfade(true)
+                bitmapConfig(Bitmap.Config.RGB_565)
+                crossfade(false)
                 error(R.color.surface_card)
             }
 
@@ -107,20 +130,26 @@ class FilmstripAdapter(
 
         fun updateSelection(isSelected: Boolean, animate: Boolean) {
             val targetScale = if (isSelected) 1.08f else 1.0f
-            val targetAlpha = if (isSelected) 1.0f else 0.55f
 
+            // All cards stay at full original brightness (1.0f alpha, no dim scrim)
+            itemView.alpha = 1.0f
             viewActiveBorder.visibility = if (isSelected) View.VISIBLE else View.GONE
-            viewUnselectedScrim.visibility = if (isSelected) View.GONE else View.VISIBLE
 
             if (animate) {
-                itemView.animate().alpha(targetAlpha).setDuration(160L).start()
                 getOrCreateSpringX().animateToFinalPosition(targetScale)
                 getOrCreateSpringY().animateToFinalPosition(targetScale)
             } else {
-                itemView.alpha = targetAlpha
                 itemView.scaleX = targetScale
                 itemView.scaleY = targetScale
             }
+        }
+
+        fun recycle() {
+            currentDisposable?.dispose()
+            currentDisposable = null
+            scaleXSpring?.cancel()
+            scaleYSpring?.cancel()
+            ivThumbnail.setImageDrawable(null)
         }
 
         private fun getOrCreateSpringX(): SpringAnimation {

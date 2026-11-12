@@ -29,7 +29,6 @@ class LocalDeleteHandler(
                 TrashUriHelper.buildUri(id, isVideo)
             }
             val pi = MediaStore.createTrashRequest(context.contentResolver, uris, true)
-            LocalDeletePolicyHook.onLocalItemTrashed(ids)
             DeleteResult.RequiresConfirmation(pi.intentSender)
         } catch (e: Exception) {
             DeleteResult.Error(e.message ?: "Failed to trash items")

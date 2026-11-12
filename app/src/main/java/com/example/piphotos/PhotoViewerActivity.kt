@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.widget.SeekBar
@@ -35,12 +36,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSnapHelper
 import androidx.recyclerview.widget.RecyclerView
+import androidx.viewpager2.widget.MarginPageTransformer
 import androidx.viewpager2.widget.ViewPager2
 import com.example.piphotos.databinding.ActivityPhotoViewerBinding
 import com.example.piphotos.DeleteResult
 import com.example.piphotos.LocalDeleteHandler
 import com.example.piphotos.media.FilmstripAdapter
 import com.example.piphotos.media.FilmstripCenterHelper
+import com.example.piphotos.media.LocalDeletePolicyHook
 import com.example.piphotos.media.LocalMediaIndex
 import com.example.piphotos.media.LocalMediaItem
 import com.example.piphotos.media.ViewerSession
@@ -59,6 +62,7 @@ class PhotoViewerActivity : AppCompatActivity() {
     private var areToolbarsVisible: Boolean = true
     private var sessionId: String? = null
     private var isCurrentFavorite: Boolean = false
+    private var isTrashMode: Boolean = false
 
     // Zoom state of the visible page only
     private var currentPageZoomed: Boolean = false
@@ -69,7 +73,24 @@ class PhotoViewerActivity : AppCompatActivity() {
     private val speedOptions = floatArrayOf(0.5f, 1.0f, 1.5f, 2.0f)
     private var isUserTrackingSeekBar = false
 
+    // Decoupled gesture synchronization flags
+    private var isUserDraggingFilmstrip = false
+    private var isSyncingFromPager = false
+    private var lastHapticTimeMs = 0L
+    private var lastViewPagerUpdateTimeMs = 0L
+    private var pendingScrubPosition = -1
+
     private val handler = Handler(Looper.getMainLooper())
+
+    private val filmstripScrubRunnable = Runnable {
+        val target = pendingScrubPosition
+        if (target in 0 until mediaItems.size && target != binding.viewPager.currentItem) {
+            binding.viewPager.setCurrentItem(target, false)
+            adapter.resetZoomExcept(target)
+            currentPageZoomed = false
+        }
+    }
+
     private val videoControlsAutoHideRunnable = Runnable {
         if (exoPlayer?.isPlaying == true && areToolbarsVisible) {
             binding.videoControlsBar.animate()
@@ -80,34 +101,15 @@ class PhotoViewerActivity : AppCompatActivity() {
         }
     }
 
-    // Flags to eliminate recursive synchronization loops between ViewPager2 and Filmstrip
-    private var isSyncingFromPager = false
-    private var isSyncingFromFilmstrip = false
-
     private val intentSenderLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val removedItem = mediaItems.getOrNull(currentPosition)
             if (removedItem != null) {
-                mediaItems.removeAt(currentPosition)
-                if (mediaItems.isEmpty()) {
-                    closeViewerInstant()
-                } else {
-                    adapter.notifyItemRemoved(currentPosition)
-                    currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
-                    filmstripAdapter.submitList(mediaItems.toList()) {
-                        val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
-                        FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
-                    }
-                    binding.viewPager.setCurrentItem(currentPosition, false)
-                    filmstripAdapter.setSelectedPosition(currentPosition)
-                    attachActivePlayerToCurrentPage()
-                    updateHeaderAndFavoriteState()
-                }
-                lifecycleScope.launch {
-                    LocalMediaIndex.getInstance(applicationContext).refreshDelta()
-                }
+                // Execute policy hook only after confirmation
+                LocalDeletePolicyHook.onLocalItemTrashed(listOf(removedItem.id))
+                onMediaItemDeletedLocally(currentPosition)
             }
         }
     }
@@ -117,8 +119,16 @@ class PhotoViewerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.setBackgroundDrawableResource(R.color.black)
+
+        // Ensure status bar & navigation icons are crisp white on black viewer background in all themes
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.isAppearanceLightStatusBars = false
+        insetsController.isAppearanceLightNavigationBars = false
+
         binding = ActivityPhotoViewerBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        isTrashMode = intent.getBooleanExtra(EXTRA_IS_TRASH_MODE, false)
 
         // System Insets: Apply padding so media draws edge-to-edge behind bars
         ViewCompat.setOnApplyWindowInsetsListener(binding.topBar) { _, insets ->
@@ -203,6 +213,9 @@ class PhotoViewerActivity : AppCompatActivity() {
 
         binding.viewPager.offscreenPageLimit = 1
         binding.viewPager.adapter = adapter
+        // Clean margin between pages for smooth native horizontal swiping
+        val gutterPx = (16 * resources.displayMetrics.density).toInt()
+        binding.viewPager.setPageTransformer(MarginPageTransformer(gutterPx))
         binding.viewPager.setCurrentItem(currentPosition, false)
 
         binding.viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
@@ -211,21 +224,21 @@ class PhotoViewerActivity : AppCompatActivity() {
                     currentPosition = position
                     adapter.resetZoomExcept(position)
                     currentPageZoomed = false
-                    attachActivePlayerToCurrentPage()
+                    attachActivePlayerToCurrentPage(autoplay = true)
                     updateHeaderAndFavoriteState()
 
-                    if (!isSyncingFromFilmstrip) {
+                    // Only scroll filmstrip programmatically if the user is NOT dragging the filmstrip
+                    if (!isUserDraggingFilmstrip) {
                         isSyncingFromPager = true
-                        filmstripAdapter.setSelectedPosition(position)
+                        filmstripAdapter.setSelectedPosition(position, binding.rvFilmstrip)
                         val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
                         FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, position, thumbWidthPx, smooth = true)
-                        isSyncingFromPager = false
                     }
                 }
             }
         })
 
-        attachActivePlayerToCurrentPage()
+        attachActivePlayerToCurrentPage(autoplay = true)
         updateHeaderAndFavoriteState()
     }
 
@@ -251,52 +264,68 @@ class PhotoViewerActivity : AppCompatActivity() {
             filmstripAdapter.submitList(mediaItems.toList()) {
                 FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
             }
-            filmstripAdapter.setSelectedPosition(currentPosition)
+            filmstripAdapter.setSelectedPosition(currentPosition, binding.rvFilmstrip)
         }
 
-        // Continuous Real-Time Sliding Sync + Subtle Haptic Tick on Thumbnail Boundary
+        // Decoupled Filmstrip Drag & Real-time Scrubbing
         binding.rvFilmstrip.addOnScrollListener(object : RecyclerView.OnScrollListener() {
-            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                super.onScrolled(recyclerView, dx, dy)
-                if (isSyncingFromPager) return
-
-                val centerPos = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
-                if (centerPos != RecyclerView.NO_POSITION && centerPos != currentPosition) {
-                    isSyncingFromFilmstrip = true
-                    currentPosition = centerPos
-                    filmstripAdapter.setSelectedPosition(centerPos)
-                    // Seamless real-time page swap as user drags
-                    binding.viewPager.setCurrentItem(centerPos, false)
-                    adapter.resetZoomExcept(centerPos)
-                    currentPageZoomed = false
-
-                    // Gentle subtle tick for premium tactile feel
-                    val hapticFlag = HapticFeedbackConstants.CLOCK_TICK
-                    recyclerView.performHapticFeedback(
-                        hapticFlag,
-                        HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
-                    )
-
-                    attachActivePlayerToCurrentPage()
-                    updateHeaderAndFavoriteState()
-                    isSyncingFromFilmstrip = false
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                super.onScrollStateChanged(recyclerView, newState)
+                when (newState) {
+                    RecyclerView.SCROLL_STATE_DRAGGING -> {
+                        isUserDraggingFilmstrip = true
+                        isSyncingFromPager = false
+                    }
+                    RecyclerView.SCROLL_STATE_IDLE -> {
+                        isUserDraggingFilmstrip = false
+                        isSyncingFromPager = false
+                        handler.removeCallbacks(filmstripScrubRunnable)
+                        val centerPos = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
+                        if (centerPos in 0 until mediaItems.size) {
+                            currentPosition = centerPos
+                            filmstripAdapter.setSelectedPosition(centerPos, recyclerView)
+                            if (binding.viewPager.currentItem != centerPos) {
+                                binding.viewPager.setCurrentItem(centerPos, false)
+                                adapter.resetZoomExcept(centerPos)
+                                currentPageZoomed = false
+                            }
+                            attachActivePlayerToCurrentPage(autoplay = true)
+                            updateHeaderAndFavoriteState()
+                        }
+                    }
                 }
             }
 
-            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
-                super.onScrollStateChanged(recyclerView, newState)
-                if (newState == RecyclerView.SCROLL_STATE_IDLE && !isSyncingFromPager) {
-                    val centerPosition = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
-                    if (centerPosition != RecyclerView.NO_POSITION && centerPosition != currentPosition) {
-                        isSyncingFromFilmstrip = true
-                        currentPosition = centerPosition
-                        filmstripAdapter.setSelectedPosition(centerPosition)
-                        binding.viewPager.setCurrentItem(centerPosition, false)
-                        adapter.resetZoomExcept(centerPosition)
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                super.onScrolled(recyclerView, dx, dy)
+                // If scroll was triggered by ViewPager swipe or snap settle: ZERO vibration, ZERO pager interference!
+                if (isSyncingFromPager || !isUserDraggingFilmstrip) {
+                    return
+                }
+
+                val centerPos = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
+                if (centerPos in 0 until mediaItems.size && centerPos != currentPosition) {
+                    currentPosition = centerPos
+                    filmstripAdapter.setSelectedPosition(centerPos, recyclerView)
+                    updateHeaderAndFavoriteState()
+
+                    // Gentle subtle tick respecting system touch settings, rate-limited to >= 40ms
+                    val now = SystemClock.uptimeMillis()
+                    if (now - lastHapticTimeMs >= 40L) {
+                        lastHapticTimeMs = now
+                        recyclerView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    }
+
+                    // Throttle full 2K ViewPager update during rapid drag to prevent OOM
+                    pendingScrubPosition = centerPos
+                    handler.removeCallbacks(filmstripScrubRunnable)
+                    if (now - lastViewPagerUpdateTimeMs >= 80L) {
+                        lastViewPagerUpdateTimeMs = now
+                        binding.viewPager.setCurrentItem(centerPos, false)
+                        adapter.resetZoomExcept(centerPos)
                         currentPageZoomed = false
-                        attachActivePlayerToCurrentPage()
-                        updateHeaderAndFavoriteState()
-                        isSyncingFromFilmstrip = false
+                    } else {
+                        handler.postDelayed(filmstripScrubRunnable, 50L)
                     }
                 }
             }
@@ -364,11 +393,15 @@ class PhotoViewerActivity : AppCompatActivity() {
         }
     }
 
-    private fun attachActivePlayerToCurrentPage() {
+    private fun attachActivePlayerToCurrentPage(autoplay: Boolean = true) {
         val item = mediaItems.getOrNull(currentPosition)
         if (item != null && item.isVideo) {
             initPlayer()
             adapter.attachPlayerToPosition(exoPlayer, currentPosition)
+            exoPlayer?.playWhenReady = autoplay
+            if (autoplay) {
+                exoPlayer?.play()
+            }
             if (areToolbarsVisible) {
                 binding.videoControlsBar.visibility = View.VISIBLE
                 binding.videoControlsBar.alpha = 1f
@@ -499,6 +532,20 @@ class PhotoViewerActivity : AppCompatActivity() {
     }
 
     private fun setupBottomBarActions() {
+        if (isTrashMode) {
+            // Trash mode: replace normal actions with Restore and Delete Permanently
+            binding.btnShare.visibility = View.GONE
+            binding.btnEdit.visibility = View.GONE
+            binding.btnAddToAlbum.visibility = View.GONE
+            binding.btnBin.visibility = View.VISIBLE
+            // Rename to Delete Forever
+            (binding.btnBin.getChildAt(1) as? android.widget.TextView)?.text = "Delete"
+            binding.btnBin.setOnClickListener {
+                permanentlyDeleteCurrentItem()
+            }
+            return
+        }
+
         // Real Share
         binding.btnShare.setOnClickListener {
             val item = mediaItems.getOrNull(currentPosition) ?: return@setOnClickListener
@@ -533,7 +580,7 @@ class PhotoViewerActivity : AppCompatActivity() {
             }.show(supportFragmentManager, AddToAlbumBottomSheet.TAG)
         }
 
-        // Real Delete / Bin
+        // Real Delete / Bin (Single Confirmation from MediaStore)
         binding.btnBin.setOnClickListener {
             confirmDeleteCurrentPhoto()
         }
@@ -541,45 +588,64 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     private fun confirmDeleteCurrentPhoto() {
         val item = mediaItems.getOrNull(currentPosition) ?: return
-        val type = if (item.isVideo) "video" else "photo"
-        AlertDialog.Builder(this)
-            .setTitle("Move to Trash?")
-            .setMessage("This $type will be moved to device Trash.")
-            .setPositiveButton("Move to Trash") { _, _ ->
-                lifecycleScope.launch {
-                    val deleteHandler = LocalDeleteHandler(this@PhotoViewerActivity)
-                    when (val result = deleteHandler.trash(listOf(item.id))) {
-                        is DeleteResult.Success -> {
-                            mediaItems.removeAt(currentPosition)
-                            if (mediaItems.isEmpty()) {
-                                closeViewerInstant()
-                            } else {
-                                adapter.notifyItemRemoved(currentPosition)
-                                currentPosition = currentPosition.coerceAtMost(mediaItems.size - 1)
-                                filmstripAdapter.submitList(mediaItems.toList()) {
-                                    val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
-                                    FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
-                                }
-                                binding.viewPager.setCurrentItem(currentPosition, false)
-                                filmstripAdapter.setSelectedPosition(currentPosition)
-                                attachActivePlayerToCurrentPage()
-                                updateHeaderAndFavoriteState()
-                            }
-                            LocalMediaIndex.getInstance(applicationContext).refreshDelta()
-                        }
-                        is DeleteResult.RequiresConfirmation -> {
-                            val request = IntentSenderRequest.Builder(result.intentSender).build()
-                            intentSenderLauncher.launch(request)
-                        }
-                        is DeleteResult.Error -> {
-                            Toast.makeText(this@PhotoViewerActivity, result.message, Toast.LENGTH_SHORT).show()
-                        }
-                    }
+        lifecycleScope.launch {
+            val deleteHandler = LocalDeleteHandler(this@PhotoViewerActivity)
+            when (val result = deleteHandler.trash(listOf(item.id))) {
+                is DeleteResult.Success -> {
+                    LocalDeletePolicyHook.onLocalItemTrashed(listOf(item.id))
+                    onMediaItemDeletedLocally(currentPosition)
+                }
+                is DeleteResult.RequiresConfirmation -> {
+                    // Launch single OS system confirmation dialog directly
+                    val request = IntentSenderRequest.Builder(result.intentSender).build()
+                    intentSenderLauncher.launch(request)
+                }
+                is DeleteResult.Error -> {
+                    Toast.makeText(this@PhotoViewerActivity, result.message, Toast.LENGTH_SHORT).show()
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
         }
+    }
+
+    private fun permanentlyDeleteCurrentItem() {
+        val item = mediaItems.getOrNull(currentPosition) ?: return
+        lifecycleScope.launch {
+            val deleteHandler = LocalDeleteHandler(this@PhotoViewerActivity)
+            when (val result = deleteHandler.deletePermanently(listOf(item.id))) {
+                is DeleteResult.Success -> {
+                    onMediaItemDeletedLocally(currentPosition)
+                }
+                is DeleteResult.RequiresConfirmation -> {
+                    val request = IntentSenderRequest.Builder(result.intentSender).build()
+                    intentSenderLauncher.launch(request)
+                }
+                is DeleteResult.Error -> {
+                    Toast.makeText(this@PhotoViewerActivity, result.message, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun onMediaItemDeletedLocally(deletedPos: Int) {
+        mediaItems.removeAt(deletedPos)
+        if (mediaItems.isEmpty()) {
+            closeViewerInstant()
+        } else {
+            adapter.notifyItemRemoved(deletedPos)
+            currentPosition = deletedPos.coerceAtMost(mediaItems.size - 1)
+            filmstripAdapter.submitList(mediaItems.toList()) {
+                val thumbWidthPx = (62 * resources.displayMetrics.density).toInt()
+                FilmstripCenterHelper.scrollToCenter(binding.rvFilmstrip, currentPosition, thumbWidthPx, smooth = false)
+            }
+            binding.viewPager.setCurrentItem(currentPosition, false)
+            filmstripAdapter.setSelectedPosition(currentPosition, binding.rvFilmstrip)
+            attachActivePlayerToCurrentPage(autoplay = true)
+            updateHeaderAndFavoriteState()
+        }
+        lifecycleScope.launch {
+            LocalMediaIndex.getInstance(applicationContext).refreshDelta()
+        }
+    }
 
     private fun setupBackNavigation() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -663,6 +729,7 @@ class PhotoViewerActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cancelVideoControlsAutoHide()
+        handler.removeCallbacks(filmstripScrubRunnable)
         exoPlayer?.release()
         exoPlayer = null
         ViewerSession.clearSession(sessionId)
@@ -671,6 +738,7 @@ class PhotoViewerActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_SESSION_ID = "extra_session_id"
         const val EXTRA_STARTING_ID = "extra_starting_id"
+        const val EXTRA_IS_TRASH_MODE = "extra_is_trash_mode"
 
         private const val MENU_ABOUT = 101
         private const val MENU_COPY = 103
@@ -679,12 +747,14 @@ class PhotoViewerActivity : AppCompatActivity() {
         fun start(
             context: Context,
             startingId: Long,
-            items: List<LocalMediaItem>
+            items: List<LocalMediaItem>,
+            isTrashMode: Boolean = false
         ) {
             val sessionId = ViewerSession.createSession(items)
             val intent = Intent(context, PhotoViewerActivity::class.java).apply {
                 putExtra(EXTRA_SESSION_ID, sessionId)
                 putExtra(EXTRA_STARTING_ID, startingId)
+                putExtra(EXTRA_IS_TRASH_MODE, isTrashMode)
             }
             context.startActivity(intent)
         }

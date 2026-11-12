@@ -103,17 +103,14 @@ class AlbumDetailActivity : AppCompatActivity() {
         loadData()
     }
 
-    override fun onResume() {
-        super.onResume()
-        loadData()
-    }
-
     private fun setupTimelineView() {
         binding.timelineView.onItemClick = { item ->
+            val isTrash = currentCategory.equals("Trash", ignoreCase = true)
             PhotoViewerActivity.start(
                 context = this,
                 startingId = item.id,
-                items = currentItems
+                items = currentItems,
+                isTrashMode = isTrash
             )
         }
 

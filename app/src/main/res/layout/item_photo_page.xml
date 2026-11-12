@@ -11,6 +11,15 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- Video Poster Frame: Instant thumbnail display so user never sees a black box -->
+    <ImageView
+        android:id="@+id/ivVideoPoster"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:visibility="gone"
+        android:contentDescription="@null" />
+
     <!-- Video PlayerView: fit mode, square edges, no rounded corners -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
@@ -20,46 +29,25 @@
         app:use_controller="false"
         app:resize_mode="fit" />
 
-    <!-- Video Center Controls Overlay: Visible when item is a video -->
+    <!-- Video Center Controls & Buffering Overlay: Visible when item is a video -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/videoOverlayContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone">
 
-        <!-- Top Right Duration Pill -->
-        <LinearLayout
-            android:id="@+id/layoutDurationBadge"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="80dp"
-            android:layout_marginEnd="16dp"
-            android:background="@drawable/bg_video_duration"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="10dp"
-            android:paddingTop="5dp"
-            android:paddingEnd="10dp"
-            android:paddingBottom="5dp"
+        <!-- Center Buffering / Loading Spinner -->
+        <ProgressBar
+            android:id="@+id/videoLoadingSpinner"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:indeterminate="true"
+            android:indeterminateTint="@color/white"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent">
-
-            <ImageView
-                android:layout_width="14dp"
-                android:layout_height="14dp"
-                android:layout_marginEnd="5dp"
-                android:src="@drawable/ic_play_badge"
-                app:tint="@color/white" />
-
-            <TextView
-                android:id="@+id/tvDurationBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0:00"
-                android:textColor="@color/white"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
 
         <!-- Center Controls Row: Rewind 10s, Center Play/Pause, Forward 10s -->
         <LinearLayout

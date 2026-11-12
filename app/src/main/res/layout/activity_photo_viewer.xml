@@ -249,20 +249,20 @@
             android:textSize="12sp"
             android:textStyle="normal" />
 
-        <!-- Filmstrip Container (Floating frosted glass capsule) -->
+        <!-- Filmstrip Container (Pure Floating Windows - No background container) -->
         <FrameLayout
             android:id="@+id/filmstripContainer"
             android:layout_width="match_parent"
-            android:layout_height="76dp"
-            android:layout_marginStart="10dp"
-            android:layout_marginEnd="10dp"
+            android:layout_height="78dp"
             android:layout_marginBottom="8dp"
-            android:background="@drawable/bg_filmstrip_capsule">
+            android:clipChildren="false"
+            android:clipToPadding="false">
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rvFilmstrip"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:clipChildren="false"
                 android:clipToPadding="false"
                 android:orientation="horizontal"
                 android:overScrollMode="never" />

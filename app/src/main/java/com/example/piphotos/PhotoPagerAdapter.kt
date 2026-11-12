@@ -5,15 +5,16 @@ import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.request.Disposable
 import coil.size.Scale
 import com.example.piphotos.media.LocalMediaItem
 import java.util.Locale
@@ -22,20 +23,15 @@ class PhotoPagerAdapter(
     private var items: List<LocalMediaItem>,
     private val onSingleTap: () -> Unit,
     private val onZoomStateChanged: (position: Int, isZoomed: Boolean) -> Unit,
-    var onPlaybackProgress: ((currentMs: Long, totalMs: Long, isPlaying: Boolean) -> Unit)? = null
+    private val onPlaybackProgress: ((currentMs: Long, totalMs: Long, isPlaying: Boolean) -> Unit)? = null
 ) : RecyclerView.Adapter<PhotoPagerAdapter.PhotoViewHolder>() {
 
     private val attachedHolders = mutableMapOf<Int, PhotoViewHolder>()
-    private var areControlsVisible: Boolean = true
     private var activePlayer: ExoPlayer? = null
     private var activePlayerPosition: Int = -1
+    private var areControlsVisible: Boolean = true
 
-    fun updateItems(newItems: List<LocalMediaItem>) {
-        items = newItems
-        notifyDataSetChanged()
-    }
-
-    fun getItemAt(position: Int): LocalMediaItem? {
+    fun getItem(position: Int): LocalMediaItem? {
         return items.getOrNull(position)
     }
 
@@ -50,16 +46,11 @@ class PhotoPagerAdapter(
         return attachedHolders[position]?.isZoomed() == true
     }
 
-    fun setControlsVisibility(visible: Boolean) {
-        areControlsVisible = visible
-        attachedHolders.values.forEach { it.setOverlayControlsVisible(visible) }
-    }
-
     fun attachPlayerToPosition(player: ExoPlayer?, position: Int) {
         activePlayer = player
         activePlayerPosition = position
         attachedHolders.forEach { (pos, holder) ->
-            if (pos == position) {
+            if (pos == position && player != null) {
                 holder.bindPlayer(player, onPlaybackProgress)
             } else {
                 holder.unbindPlayer()
@@ -71,6 +62,11 @@ class PhotoPagerAdapter(
         activePlayer = null
         activePlayerPosition = -1
         attachedHolders.values.forEach { it.unbindPlayer() }
+    }
+
+    fun setControlsVisibility(visible: Boolean) {
+        areControlsVisible = visible
+        attachedHolders.values.forEach { it.setOverlayControlsVisible(visible) }
     }
 
     override fun getItemCount(): Int = items.size
@@ -111,16 +107,21 @@ class PhotoPagerAdapter(
         holder.unbindPlayer()
     }
 
+    override fun onViewRecycled(holder: PhotoViewHolder) {
+        super.onViewRecycled(holder)
+        holder.recycle()
+    }
+
     class PhotoViewHolder(
         itemView: View,
         private val onSingleTap: () -> Unit,
         private val onZoomStateChanged: (position: Int, isZoomed: Boolean) -> Unit
     ) : RecyclerView.ViewHolder(itemView) {
         private val zoomImageView: ZoomableImageView = itemView.findViewById(R.id.zoomImageView)
+        private val ivVideoPoster: ImageView = itemView.findViewById(R.id.ivVideoPoster)
         private val playerView: PlayerView = itemView.findViewById(R.id.playerView)
         private val videoOverlayContainer: View = itemView.findViewById(R.id.videoOverlayContainer)
-        private val layoutDurationBadge: View = itemView.findViewById(R.id.layoutDurationBadge)
-        private val tvDurationBadge: TextView = itemView.findViewById(R.id.tvDurationBadge)
+        private val videoLoadingSpinner: ProgressBar = itemView.findViewById(R.id.videoLoadingSpinner)
         private val btnCenterPlayPause: FrameLayout = itemView.findViewById(R.id.btnCenterPlayPause)
         private val ivCenterPlayPause: ImageView = itemView.findViewById(R.id.ivCenterPlayPause)
         private val btnRewind10: FrameLayout = itemView.findViewById(R.id.btnRewind10)
@@ -130,6 +131,8 @@ class PhotoPagerAdapter(
         private var boundPlayer: ExoPlayer? = null
         private var currentItem: LocalMediaItem? = null
         private var progressCallback: ((Long, Long, Boolean) -> Unit)? = null
+        private var imageDisposable: Disposable? = null
+        private var posterDisposable: Disposable? = null
 
         private val progressUpdateRunnable = object : Runnable {
             override fun run() {
@@ -153,6 +156,8 @@ class PhotoPagerAdapter(
                     progressCallback?.invoke(currentMs, totalMs, isPlaying)
                 }
                 if (isPlaying) {
+                    ivVideoPoster.visibility = View.GONE
+                    videoLoadingSpinner.visibility = View.GONE
                     handler.post(progressUpdateRunnable)
                 } else {
                     handler.removeCallbacks(progressUpdateRunnable)
@@ -161,11 +166,23 @@ class PhotoPagerAdapter(
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val player = boundPlayer ?: return
-                if (playbackState == Player.STATE_READY) {
-                    val durationMs = player.duration
-                    if (durationMs > 0) {
-                        tvDurationBadge.text = formatMs(durationMs)
-                        progressCallback?.invoke(player.currentPosition, durationMs, player.isPlaying)
+                when (playbackState) {
+                    Player.STATE_BUFFERING -> {
+                        videoLoadingSpinner.visibility = View.VISIBLE
+                    }
+                    Player.STATE_READY -> {
+                        videoLoadingSpinner.visibility = View.GONE
+                        val durationMs = player.duration
+                        if (durationMs > 0) {
+                            progressCallback?.invoke(player.currentPosition, durationMs, player.isPlaying)
+                        }
+                    }
+                    Player.STATE_ENDED -> {
+                        videoLoadingSpinner.visibility = View.GONE
+                        updatePlayPauseIcon(false)
+                    }
+                    else -> {
+                        videoLoadingSpinner.visibility = View.GONE
                     }
                 }
             }
@@ -217,41 +234,43 @@ class PhotoPagerAdapter(
             currentItem = item
             resetZoom()
 
+            // Cancel any pending decode requests on rebind
+            imageDisposable?.dispose()
+            posterDisposable?.dispose()
+
             if (item.isVideo) {
                 zoomImageView.visibility = View.GONE
                 playerView.visibility = View.VISIBLE
+                ivVideoPoster.visibility = View.VISIBLE
                 videoOverlayContainer.visibility = if (areControlsVisible) View.VISIBLE else View.GONE
-                val initialDuration = item.durationMs
-                tvDurationBadge.text = formatMs(initialDuration)
+                videoLoadingSpinner.visibility = View.GONE
+
+                // Instant first-frame poster thumbnail so user never sees a black box
+                posterDisposable = ivVideoPoster.load(item.contentUri) {
+                    size(1024, 1024)
+                    scale(Scale.FIT)
+                    crossfade(true)
+                }
             } else {
                 unbindPlayer()
                 playerView.visibility = View.GONE
+                ivVideoPoster.visibility = View.GONE
                 videoOverlayContainer.visibility = View.GONE
+                videoLoadingSpinner.visibility = View.GONE
                 zoomImageView.visibility = View.VISIBLE
 
                 // Drop previous photo first to prevent incorrect sizing
                 zoomImageView.setImageDrawable(null)
 
-                // Decelerate scale (0.985 -> 1.0) and crossfade transition without black frame
-                zoomImageView.scaleX = 0.985f
-                zoomImageView.scaleY = 0.985f
-                zoomImageView.alpha = 0.7f
+                // Smooth native photo paging: full 1.0x scale and 1.0 alpha
+                zoomImageView.scaleX = 1.0f
+                zoomImageView.scaleY = 1.0f
+                zoomImageView.alpha = 1.0f
 
-                zoomImageView.load(item.contentUri) {
+                imageDisposable = zoomImageView.load(item.contentUri) {
                     size(2048, 2048)
                     scale(Scale.FIT)
-                    crossfade(280)
-                    listener(
-                        onSuccess = { _, _ ->
-                            zoomImageView.animate()
-                                .scaleX(1.0f)
-                                .scaleY(1.0f)
-                                .alpha(1.0f)
-                                .setDuration(280L)
-                                .setInterpolator(DecelerateInterpolator())
-                                .start()
-                        }
-                    )
+                    crossfade(180)
                     error(R.color.surface_card)
                 }
             }
@@ -274,6 +293,7 @@ class PhotoPagerAdapter(
             player.prepare()
             updatePlayPauseIcon(player.isPlaying)
             if (player.isPlaying) {
+                ivVideoPoster.visibility = View.GONE
                 handler.post(progressUpdateRunnable)
             }
         }
@@ -287,6 +307,17 @@ class PhotoPagerAdapter(
             boundPlayer = null
             progressCallback = null
             updatePlayPauseIcon(false)
+            videoLoadingSpinner.visibility = View.GONE
+        }
+
+        fun recycle() {
+            imageDisposable?.dispose()
+            imageDisposable = null
+            posterDisposable?.dispose()
+            posterDisposable = null
+            zoomImageView.setImageDrawable(null)
+            ivVideoPoster.setImageDrawable(null)
+            unbindPlayer()
         }
 
         private fun updatePlayPauseIcon(isPlaying: Boolean) {
@@ -307,13 +338,6 @@ class PhotoPagerAdapter(
                     }.start()
                 }
             }
-        }
-
-        private fun formatMs(ms: Long): String {
-            val totalSec = (ms / 1000L).coerceAtLeast(0L)
-            val min = totalSec / 60
-            val sec = totalSec % 60
-            return String.format(Locale.US, "%d:%02d", min, sec)
         }
     }
 }
