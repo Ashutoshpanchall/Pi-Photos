@@ -170,4 +170,32 @@ class PhaseG3TimelineTest {
         assertFalse(callback.areItemsTheSame(row1, row2))
         assertNotEquals(row1.stableId, header.stableId)
     }
+
+    @Test
+    fun filterByQuery_matchesKeywordsCorrectly() {
+        // Nov 11, 2026 UTC = 1794355200000 ms
+        val photo = createMediaItem(id = 1L, timestampMs = 1794355200000L, isVideo = false, bucketName = "Vacation")
+        val video = createMediaItem(id = 2L, timestampMs = 1794355200000L, isVideo = true, bucketName = "Camera")
+        val items = listOf(photo, video)
+
+        // 1. Filter "video"
+        val videoResult = TimelineStateMachine.filterByQuery(items, "video", emptySet())
+        assertEquals(listOf(video), videoResult)
+
+        // 2. Filter "photo"
+        val photoResult = TimelineStateMachine.filterByQuery(items, "photo", emptySet())
+        assertEquals(listOf(photo), photoResult)
+
+        // 3. Filter album name "vacation"
+        val albumResult = TimelineStateMachine.filterByQuery(items, "vacation", emptySet())
+        assertEquals(listOf(photo), albumResult)
+
+        // 4. Filter favorites
+        val favResult = TimelineStateMachine.filterByQuery(items, "favorite", setOf(2L))
+        assertEquals(listOf(video), favResult)
+
+        // 5. Filter year "2026"
+        val yearResult = TimelineStateMachine.filterByQuery(items, "2026", emptySet())
+        assertEquals(2, yearResult.size)
+    }
 }

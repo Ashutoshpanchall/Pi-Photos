@@ -1,7 +1,11 @@
 package com.example.piphotos
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.inputmethod.InputMethodManager
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -37,6 +41,7 @@ class TimelineFragment : Fragment() {
     private var cachedFavoriteIds: Set<Long> = emptySet()
     private var lastRenderedRevision: Long = -1L
     private var filterJob: Job? = null
+    private var activeSearchQuery: String = ""
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -57,7 +62,9 @@ class TimelineFragment : Fragment() {
 
     private val backPressedCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
-            if (binding.timelineView.isSelectionMode) {
+            if (isSearching()) {
+                closeSearch()
+            } else if (binding.timelineView.isSelectionMode) {
                 binding.timelineView.clearSelection()
             }
         }
@@ -77,6 +84,7 @@ class TimelineFragment : Fragment() {
         requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backPressedCallback)
 
         setupTopHeader()
+        setupSearch()
         setupSelectionBar()
         setupCategoryChips()
         setupPartialAccessBanner()
@@ -96,13 +104,53 @@ class TimelineFragment : Fragment() {
             binding.timelineView.cycleGroupMode()
         }
 
-        binding.btnTimelineSearch.setOnClickListener {
-            Toast.makeText(requireContext(), "Search will be available in Phase G6", Toast.LENGTH_SHORT).show()
-        }
-
         binding.btnTimelineOverflow.setOnClickListener { view ->
             showOverflowMenu(view)
         }
+    }
+
+    private fun setupSearch() {
+        binding.btnTimelineSearch.setOnClickListener {
+            binding.layoutTimelineSearchBar.visibility = View.VISIBLE
+            binding.topTimelineHeader.visibility = View.GONE
+            binding.etSearchQuery.requestFocus()
+            backPressedCallback.isEnabled = true
+            val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(binding.etSearchQuery, InputMethodManager.SHOW_IMPLICIT)
+        }
+
+        binding.btnSearchBack.setOnClickListener {
+            closeSearch()
+        }
+
+        binding.btnSearchClear.setOnClickListener {
+            binding.etSearchQuery.setText("")
+        }
+
+        binding.etSearchQuery.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                activeSearchQuery = s?.toString()?.trim() ?: ""
+                binding.btnSearchClear.visibility = if (activeSearchQuery.isNotEmpty()) View.VISIBLE else View.GONE
+                updateUiWithCurrentState()
+            }
+        })
+    }
+
+    private fun isSearching(): Boolean {
+        return _binding?.layoutTimelineSearchBar?.visibility == View.VISIBLE
+    }
+
+    private fun closeSearch() {
+        activeSearchQuery = ""
+        binding.etSearchQuery.setText("")
+        binding.layoutTimelineSearchBar.visibility = View.GONE
+        binding.topTimelineHeader.visibility = View.VISIBLE
+        val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(binding.etSearchQuery.windowToken, 0)
+        backPressedCallback.isEnabled = binding.timelineView.isSelectionMode
+        updateUiWithCurrentState()
     }
 
     private fun setupSelectionBar() {
@@ -275,7 +323,8 @@ class TimelineFragment : Fragment() {
             hasPermission = hasAccess,
             indexState = index.indexStateFlow.value,
             filter = currentFilter,
-            favoriteIds = cachedFavoriteIds
+            favoriteIds = cachedFavoriteIds,
+            searchQuery = activeSearchQuery
         )
 
         when (state) {
@@ -296,8 +345,8 @@ class TimelineFragment : Fragment() {
                 binding.layoutTimelineLoading.visibility = View.GONE
                 binding.timelineView.visibility = View.GONE
                 binding.layoutTimelineEmpty.visibility = View.VISIBLE
-                binding.tvEmptyTitle.text = TimelineStateMachine.getEmptyTitle(state.filter)
-                binding.tvEmptySubtitle.text = TimelineStateMachine.getEmptySubtitle(state.filter)
+                binding.tvEmptyTitle.text = TimelineStateMachine.getEmptyTitle(state.filter, activeSearchQuery)
+                binding.tvEmptySubtitle.text = TimelineStateMachine.getEmptySubtitle(state.filter, activeSearchQuery)
                 binding.btnAllowAccess.visibility = View.GONE
             }
             is TimelineUiState.Ready -> {
