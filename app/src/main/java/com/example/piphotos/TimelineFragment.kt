@@ -120,9 +120,7 @@ class TimelineFragment : Fragment() {
 
             viewLifecycleOwner.lifecycleScope.launch {
                 val repo = LocalMediaIndex.getInstance(requireContext()).favoritesRepo
-                for (id in selected) {
-                    repo.toggleFavorite(id)
-                }
+                repo.toggleGroup(selected)
                 cachedFavoriteIds = repo.getAllFavoriteIds()
                 if (currentFilter == TimelineCategoryFilter.FAVORITES) {
                     updateUiWithCurrentState()

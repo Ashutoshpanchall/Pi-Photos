@@ -516,10 +516,7 @@ class PhotoViewerActivity : AppCompatActivity() {
 
     private fun showPhotoInfoSheet() {
         val item = mediaItems.getOrNull(currentPosition) ?: return
-        val dateFormat = SimpleDateFormat("MMMM d, yyyy · h:mm a", Locale.getDefault())
-        val dateStr = dateFormat.format(Date(item.effectiveDateMs))
-        val title = "${if (item.isVideo) "VID" else "IMG"}_${item.id}"
-        PhotoInfoBottomSheet.newInstance(title, dateStr)
+        PhotoInfoBottomSheet.newInstance(item.id)
             .show(supportFragmentManager, PhotoInfoBottomSheet.TAG)
     }
 

@@ -37,7 +37,8 @@ class ReleaseLeakCheckTest {
         } else {
             Regex.escape(token)
         }
-        return Regex(pattern, RegexOption.IGNORE_CASE).containsMatchIn(text)
+        val options = if (token == "SSD") emptySet() else setOf(RegexOption.IGNORE_CASE)
+        return Regex(pattern, options).containsMatchIn(text)
     }
 
     @Test

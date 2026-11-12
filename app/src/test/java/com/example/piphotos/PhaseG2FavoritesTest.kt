@@ -55,4 +55,32 @@ class PhaseG2FavoritesTest {
         assertTrue(repo.isFavorite(102L))
         assertEquals(1, repo.getAllFavoriteIds().size)
     }
+
+    @Test
+    fun favoritesRepository_toggleGroup_favoritesAllWhenMixed_unfavoritesAllWhenAllFavorited() = runBlocking {
+        val dao = TestFavoriteDao()
+        val repo = FavoritesRepository(dao)
+
+        // Initial state: 101 is favorite, 102 and 103 are NOT favorites
+        repo.addFavorite(101L)
+        assertTrue(repo.isFavorite(101L))
+        assertFalse(repo.isFavorite(102L))
+        assertFalse(repo.isFavorite(103L))
+
+        // Toggle mixed group {101, 102, 103} -> Google Photos behavior: favorite ALL of them
+        val result1 = repo.toggleGroup(listOf(101L, 102L, 103L))
+        assertTrue(result1)
+        assertTrue(repo.isFavorite(101L))
+        assertTrue(repo.isFavorite(102L))
+        assertTrue(repo.isFavorite(103L))
+        assertEquals(setOf(101L, 102L, 103L), repo.getAllFavoriteIds())
+
+        // Now that ALL are favorited: toggleGroup {101, 102, 103} -> unfavorite ALL of them
+        val result2 = repo.toggleGroup(listOf(101L, 102L, 103L))
+        assertFalse(result2)
+        assertFalse(repo.isFavorite(101L))
+        assertFalse(repo.isFavorite(102L))
+        assertFalse(repo.isFavorite(103L))
+        assertEquals(0, repo.getAllFavoriteIds().size)
+    }
 }

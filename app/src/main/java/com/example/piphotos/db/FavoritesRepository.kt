@@ -67,6 +67,38 @@ class FavoritesRepository(
         _idsFlow.value = dao.allFavoriteIds.toSet()
     }
 
+    suspend fun favoriteAll(mediaIds: Collection<Long>) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        for (id in mediaIds) {
+            dao.addFavorite(FavoriteEntity(id, now))
+        }
+        _idsFlow.value = dao.allFavoriteIds.toSet()
+    }
+
+    suspend fun unfavoriteAll(mediaIds: Collection<Long>) = withContext(Dispatchers.IO) {
+        for (id in mediaIds) {
+            dao.removeFavorite(id)
+        }
+        _idsFlow.value = dao.allFavoriteIds.toSet()
+    }
+
+    /**
+     * Aligns with Google Photos: if selection mixes favorited and non-favorited items,
+     * favorite all selected items. Only if all are already favorited, unfavorite them all.
+     */
+    suspend fun toggleGroup(mediaIds: Collection<Long>): Boolean = withContext(Dispatchers.IO) {
+        if (mediaIds.isEmpty()) return@withContext false
+        val currentFavs = dao.allFavoriteIds.toSet()
+        val allAreFavorites = mediaIds.all { currentFavs.contains(it) }
+        if (allAreFavorites) {
+            unfavoriteAll(mediaIds)
+            false
+        } else {
+            favoriteAll(mediaIds)
+            true
+        }
+    }
+
     suspend fun toggle(id: Long): Boolean = toggleFavorite(id)
 
     suspend fun toggleFavorite(mediaId: Long): Boolean = withContext(Dispatchers.IO) {
