@@ -5,8 +5,12 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
@@ -14,10 +18,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.example.piphotos.databinding.ActivityAlbumDetailBinding
 import com.example.piphotos.db.AlbumsRepository
 import com.example.piphotos.media.LocalMediaIndex
 import com.example.piphotos.media.LocalMediaItem
+import com.example.piphotos.media.ThumbnailLoader
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -69,6 +76,10 @@ class AlbumDetailActivity : AppCompatActivity() {
 
         if (albumId != -1L) {
             binding.btnAlbumMenu.visibility = View.VISIBLE
+            binding.btnAlbumAddPhotos.visibility = View.VISIBLE
+            binding.btnAlbumAddPhotos.setOnClickListener {
+                showAddPhotosPicker()
+            }
             binding.btnAlbumMenu.setOnClickListener {
                 showUserAlbumMenu()
             }
@@ -77,6 +88,7 @@ class AlbumDetailActivity : AppCompatActivity() {
             }
         } else {
             binding.btnAlbumMenu.visibility = View.GONE
+            binding.btnAlbumAddPhotos.visibility = View.GONE
         }
 
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
@@ -110,7 +122,8 @@ class AlbumDetailActivity : AppCompatActivity() {
                 context = this,
                 startingId = item.id,
                 items = currentItems,
-                isTrashMode = isTrash
+                isTrashMode = isTrash,
+                albumId = albumId
             )
         }
 
@@ -124,8 +137,10 @@ class AlbumDetailActivity : AppCompatActivity() {
                 val isTrash = currentCategory.equals("Trash", ignoreCase = true)
                 binding.btnSelectionRestore.visibility = if (isTrash) View.VISIBLE else View.GONE
                 binding.btnSelectionShare.visibility = if (isTrash) View.GONE else View.VISIBLE
+                binding.btnSelectionSetCover.visibility = if (albumId != -1L && count == 1) View.VISIBLE else View.GONE
             } else {
                 binding.layoutSelectionBar.visibility = View.GONE
+                binding.btnSelectionSetCover.visibility = View.GONE
                 binding.btnSelect.text = "Select"
             }
         }
@@ -224,8 +239,8 @@ class AlbumDetailActivity : AppCompatActivity() {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_nav_albums)
                 binding.tvEmptyTitle.text = "This Album is Empty"
                 binding.tvEmptySubtitle.text = "Add photos to this album from your photo collection."
-                binding.btnEmptyAction.text = "Return to Albums"
-                binding.btnEmptyAction.setOnClickListener { finish() }
+                binding.btnEmptyAction.text = "Add Photos"
+                binding.btnEmptyAction.setOnClickListener { showAddPhotosPicker() }
             }
             currentCategory.equals("favorites", ignoreCase = true) -> {
                 binding.ivEmptyIcon.setImageResource(R.drawable.ic_heart)
@@ -314,6 +329,15 @@ class AlbumDetailActivity : AppCompatActivity() {
             } else {
                 binding.timelineView.isSelectionMode = true
                 binding.btnSelect.text = "Cancel"
+            }
+        }
+
+        binding.btnSelectionSetCover.setOnClickListener {
+            val selectedId = binding.timelineView.selectedIds.firstOrNull() ?: return@setOnClickListener
+            lifecycleScope.launch {
+                AlbumsRepository(this@AlbumDetailActivity).setAlbumCover(albumId, selectedId)
+                Toast.makeText(this@AlbumDetailActivity, "Set as album cover", Toast.LENGTH_SHORT).show()
+                exitSelectionMode()
             }
         }
 
@@ -448,6 +472,106 @@ class AlbumDetailActivity : AppCompatActivity() {
         binding.timelineView.clearSelection()
         binding.btnSelect.text = "Select"
         binding.layoutSelectionBar.visibility = View.GONE
+    }
+
+    private fun showAddPhotosPicker() {
+        val allItems = LocalMediaIndex.getInstance(this).getAllItems()
+        val currentIds = currentItems.map { it.id }.toSet()
+        val availableItems = allItems.filter { !currentIds.contains(it.id) }
+
+        if (availableItems.isEmpty()) {
+            Toast.makeText(this, "All your photos are already in this album", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val tempSelected = mutableSetOf<Long>()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_photo_picker, null)
+        val recyclerView = dialogView.findViewById<RecyclerView>(R.id.rvPickerGrid)
+        recyclerView.layoutManager = GridLayoutManager(this, 3)
+
+        val adapter = AlbumPhotoPickerAdapter(availableItems, tempSelected)
+        recyclerView.adapter = adapter
+
+        AlertDialog.Builder(this)
+            .setTitle("Add Photos to Album")
+            .setView(dialogView)
+            .setPositiveButton("Add") { _, _ ->
+                val chosenItems = availableItems.filter { tempSelected.contains(it.id) }
+                if (chosenItems.isNotEmpty()) {
+                    lifecycleScope.launch {
+                        AlbumsRepository(this@AlbumDetailActivity).addPhotos(albumId, chosenItems)
+                        Toast.makeText(this@AlbumDetailActivity, "Added ${chosenItems.size} photos", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private class AlbumPhotoPickerAdapter(
+        private val items: List<LocalMediaItem>,
+        private val selectedIds: MutableSet<Long>
+    ) : RecyclerView.Adapter<AlbumPhotoPickerAdapter.PickerViewHolder>() {
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PickerViewHolder {
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_picker_tile, parent, false)
+            return PickerViewHolder(view)
+        }
+
+        override fun onBindViewHolder(holder: PickerViewHolder, position: Int) {
+            holder.bind(items[position])
+        }
+
+        override fun onViewRecycled(holder: PickerViewHolder) {
+            super.onViewRecycled(holder)
+            holder.recycle()
+        }
+
+        override fun getItemCount(): Int = items.size
+
+        inner class PickerViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+            private val ivPhoto: ImageView = itemView.findViewById(R.id.ivPickerPhoto)
+            private val ivCheck: ImageView = itemView.findViewById(R.id.ivPickerCheck)
+            private var signal: CancellationSignal? = null
+
+            fun bind(item: LocalMediaItem) {
+                signal?.cancel()
+                signal = null
+
+                val cached = ThumbnailLoader.getFromCache(item, 220)
+                if (cached != null && !cached.isRecycled) {
+                    ivPhoto.setImageBitmap(cached)
+                } else {
+                    ivPhoto.setImageResource(R.color.surface_card)
+                    signal = ThumbnailLoader.loadThumbnail(
+                        context = itemView.context,
+                        item = item,
+                        targetSizePx = 220
+                    ) { bitmap ->
+                        ivPhoto.setImageBitmap(bitmap)
+                    }
+                }
+
+                val isSelected = selectedIds.contains(item.id)
+                ivCheck.visibility = if (isSelected) View.VISIBLE else View.GONE
+
+                itemView.setOnClickListener {
+                    if (selectedIds.contains(item.id)) {
+                        selectedIds.remove(item.id)
+                        ivCheck.visibility = View.GONE
+                    } else {
+                        selectedIds.add(item.id)
+                        ivCheck.visibility = View.VISIBLE
+                    }
+                }
+            }
+
+            fun recycle() {
+                signal?.cancel()
+                signal = null
+                ivPhoto.setImageDrawable(null)
+            }
+        }
     }
 
     companion object {

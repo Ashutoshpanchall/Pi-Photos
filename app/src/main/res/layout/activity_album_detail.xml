@@ -92,6 +92,19 @@
                     android:textStyle="bold"
                     android:visibility="gone" />
 
+                <ImageView
+                    android:id="@+id/btnAlbumAddPhotos"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginEnd="6dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Add photos to album"
+                    android:padding="6dp"
+                    android:src="@drawable/ic_add_to"
+                    android:visibility="gone"
+                    app:tint="@color/text_primary" />
+
                 <TextView
                     android:id="@+id/btnSelect"
                     android:layout_width="wrap_content"
@@ -242,6 +255,34 @@
             android:textColor="@color/text_primary"
             android:textSize="15sp"
             android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/btnSelectionSetCover"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/bg_pill_capsule"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingEnd="12dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:src="@drawable/ic_star_filled"
+                app:tint="@color/status_amber" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:text="Make Cover"
+                android:textColor="@color/text_primary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <ImageView
             android:id="@+id/btnSelectionRestore"

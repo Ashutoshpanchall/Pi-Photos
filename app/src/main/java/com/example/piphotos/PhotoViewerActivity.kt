@@ -63,6 +63,7 @@ class PhotoViewerActivity : AppCompatActivity() {
     private var sessionId: String? = null
     private var isCurrentFavorite: Boolean = false
     private var isTrashMode: Boolean = false
+    private var albumId: Long = -1L
 
     // Zoom state of the visible page only
     private var currentPageZoomed: Boolean = false
@@ -125,6 +126,7 @@ class PhotoViewerActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         isTrashMode = intent.getBooleanExtra(EXTRA_IS_TRASH_MODE, false)
+        albumId = intent.getLongExtra(EXTRA_ALBUM_ID, -1L)
 
         // System Insets: Apply padding so media draws edge-to-edge behind bars
         ViewCompat.setOnApplyWindowInsetsListener(binding.topBar) { _, insets ->
@@ -506,13 +508,24 @@ class PhotoViewerActivity : AppCompatActivity() {
     private fun showOverflowMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
         popup.menu.add(0, MENU_ABOUT, 0, "Details")
-        popup.menu.add(0, MENU_COPY, 1, "Copy link")
-        popup.menu.add(0, MENU_DELETE, 2, "Delete")
+        if (albumId != -1L) {
+            popup.menu.add(0, MENU_SET_AS_COVER, 1, "Set as Album Cover")
+        }
+        popup.menu.add(0, MENU_COPY, 2, "Copy link")
+        popup.menu.add(0, MENU_DELETE, 3, "Delete")
 
         popup.setOnMenuItemClickListener { menuItem ->
             when (menuItem.itemId) {
                 MENU_ABOUT -> {
                     showPhotoInfoSheet()
+                    true
+                }
+                MENU_SET_AS_COVER -> {
+                    val currentItem = mediaItems.getOrNull(currentPosition) ?: return@setOnMenuItemClickListener true
+                    lifecycleScope.launch {
+                        com.example.piphotos.db.AlbumsRepository(this@PhotoViewerActivity).setAlbumCover(albumId, currentItem.id)
+                        Toast.makeText(this@PhotoViewerActivity, "Set as album cover", Toast.LENGTH_SHORT).show()
+                    }
                     true
                 }
                 MENU_COPY -> {
@@ -751,22 +764,26 @@ class PhotoViewerActivity : AppCompatActivity() {
         const val EXTRA_SESSION_ID = "extra_session_id"
         const val EXTRA_STARTING_ID = "extra_starting_id"
         const val EXTRA_IS_TRASH_MODE = "extra_is_trash_mode"
+        const val EXTRA_ALBUM_ID = "extra_album_id"
 
         private const val MENU_ABOUT = 101
         private const val MENU_COPY = 103
         private const val MENU_DELETE = 104
+        private const val MENU_SET_AS_COVER = 105
 
         fun start(
             context: Context,
             startingId: Long,
             items: List<LocalMediaItem>,
-            isTrashMode: Boolean = false
+            isTrashMode: Boolean = false,
+            albumId: Long = -1L
         ) {
             val sessionId = ViewerSession.createSession(items)
             val intent = Intent(context, PhotoViewerActivity::class.java).apply {
                 putExtra(EXTRA_SESSION_ID, sessionId)
                 putExtra(EXTRA_STARTING_ID, startingId)
                 putExtra(EXTRA_IS_TRASH_MODE, isTrashMode)
+                putExtra(EXTRA_ALBUM_ID, albumId)
             }
             context.startActivity(intent)
         }

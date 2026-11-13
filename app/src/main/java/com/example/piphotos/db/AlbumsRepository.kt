@@ -48,6 +48,10 @@ class AlbumsRepository(
         albumId
     }
 
+    suspend fun setAlbumCover(albumId: Long, coverMediaStoreId: Long) = withContext(Dispatchers.IO) {
+        albumDao.updateCover(albumId, coverMediaStoreId)
+    }
+
     suspend fun renameAlbum(id: Long, newName: String) = withContext(Dispatchers.IO) {
         albumDao.renameAlbum(id, newName)
     }
@@ -82,11 +86,12 @@ class AlbumsRepository(
         val entities = albumDao.allAlbums
         entities.map { entity ->
             val count = albumDao.getItemCountForAlbum(entity.id)
+            val coverId = entity.coverMediaStoreId ?: albumDao.getItemIdsForAlbum(entity.id).firstOrNull()
             AlbumWithCount(
                 id = entity.id,
                 name = entity.name ?: "Album",
                 createdAtMs = entity.createdAtMs,
-                coverMediaStoreId = entity.coverMediaStoreId,
+                coverMediaStoreId = coverId,
                 itemCount = count
             )
         }
@@ -95,11 +100,12 @@ class AlbumsRepository(
     suspend fun getAlbumById(albumId: Long): AlbumWithCount? = withContext(Dispatchers.IO) {
         val entity = albumDao.getAlbumById(albumId) ?: return@withContext null
         val count = albumDao.getItemCountForAlbum(albumId)
+        val coverId = entity.coverMediaStoreId ?: albumDao.getItemIdsForAlbum(albumId).firstOrNull()
         AlbumWithCount(
             id = entity.id,
             name = entity.name ?: "Album",
             createdAtMs = entity.createdAtMs,
-            coverMediaStoreId = entity.coverMediaStoreId,
+            coverMediaStoreId = coverId,
             itemCount = count
         )
     }
