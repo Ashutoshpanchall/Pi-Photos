@@ -208,6 +208,7 @@
                             android:orientation="vertical">
 
                             <TextView
+                                android:id="@+id/tvBackupProgressTitle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/backup_progress_title"
@@ -216,6 +217,7 @@
                                 android:textStyle="bold" />
 
                             <TextView
+                                android:id="@+id/tvBackupProgressSubtitle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="2dp"
@@ -244,12 +246,13 @@
 
                     <!-- Horizontal Progress Bar -->
                     <ProgressBar
+                        android:id="@+id/pbBackupProgress"
                         style="?android:attr/progressBarStyleHorizontal"
                         android:layout_width="match_parent"
                         android:layout_height="6dp"
                         android:layout_marginTop="16dp"
-                        android:max="142"
-                        android:progress="38"
+                        android:max="100"
+                        android:progress="0"
                         android:progressBackgroundTint="@color/progress_track"
                         android:progressTint="@color/primary_blue" />
 
@@ -273,6 +276,7 @@
                                 app:tint="@color/primary_blue" />
 
                             <TextView
+                                android:id="@+id/tvBackupSpeed"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/backup_speed"
@@ -296,6 +300,7 @@
                                 app:tint="@color/text_tertiary" />
 
                             <TextView
+                                android:id="@+id/tvBackupEta"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="@string/backup_eta"
