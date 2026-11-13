@@ -253,14 +253,17 @@
                         android:layout_marginTop="16dp"
                         android:max="100"
                         android:progress="0"
+                        android:visibility="gone"
                         android:progressBackgroundTint="@color/progress_track"
                         android:progressTint="@color/primary_blue" />
 
                     <!-- Metrics row: Speed & ETA -->
                     <RelativeLayout
+                        android:id="@+id/layoutBackupMetrics"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp">
+                        android:layout_marginTop="12dp"
+                        android:visibility="gone">
 
                         <LinearLayout
                             android:layout_width="wrap_content"
@@ -552,6 +555,7 @@
                         android:orientation="horizontal">
 
                         <View
+                            android:id="@+id/dotStatusCamera"
                             android:layout_width="6dp"
                             android:layout_height="6dp"
                             android:layout_marginEnd="6dp"
@@ -559,6 +563,7 @@
                             app:backgroundTint="@color/primary_blue" />
 
                         <TextView
+                            android:id="@+id/tvStatusCamera"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/status_active"
@@ -626,6 +631,7 @@
                         android:orientation="horizontal">
 
                         <View
+                            android:id="@+id/dotStatusScreenshots"
                             android:layout_width="6dp"
                             android:layout_height="6dp"
                             android:layout_marginEnd="6dp"
@@ -633,6 +639,7 @@
                             app:backgroundTint="@color/text_tertiary" />
 
                         <TextView
+                            android:id="@+id/tvStatusScreenshots"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/status_paused"
@@ -693,6 +700,7 @@
                         android:orientation="vertical">
 
                         <TextView
+                            android:id="@+id/tvErrorTitle"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/error_file"
@@ -701,6 +709,7 @@
                             android:textStyle="bold" />
 
                         <TextView
+                            android:id="@+id/tvErrorReason"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"

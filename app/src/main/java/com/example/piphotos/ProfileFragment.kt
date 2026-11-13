@@ -12,6 +12,8 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.example.piphotos.databinding.FragmentProfileBinding
 import com.example.piphotos.databinding.ItemNodeUserBinding
+import com.example.piphotos.sync.DevicePairingBottomSheet
+import com.example.piphotos.sync.SyncNodePreferences
 
 class ProfileFragment : Fragment() {
 
@@ -31,7 +33,10 @@ class ProfileFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         binding.btnProfileSetupPi.setOnClickListener {
-            Toast.makeText(requireContext(), "Pi Vault onboarding will be available in Phase G7", Toast.LENGTH_SHORT).show()
+            DevicePairingBottomSheet {
+                bindDeviceStorage()
+                renderUsersList()
+            }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
         }
 
         // Dynamic People on this Node list (only if connected to a node with users)
@@ -121,8 +126,9 @@ class ProfileFragment : Fragment() {
 
     private fun renderUsersList() {
         val b = _binding ?: return
-        val isLocalOnly = BackupState.current is BackupState.LocalOnly
-        if (isLocalOnly) {
+        val context = context ?: return
+        val isPaired = SyncNodePreferences.isPaired(context)
+        if (!isPaired) {
             b.cardPersonalQuota.visibility = View.GONE
             b.layoutPeopleSection.visibility = View.GONE
             b.layoutNodePill.visibility = View.GONE
@@ -133,6 +139,10 @@ class ProfileFragment : Fragment() {
             b.containerUsersList.removeAllViews()
             return
         }
+
+        b.cardProfilePiOptIn.visibility = View.GONE
+        b.cardPersonalQuota.visibility = View.VISIBLE
+        b.layoutNodePill.visibility = View.VISIBLE
 
         val users = NodeRepository.getUsers()
         b.layoutPeopleSection.visibility = if (users.isNotEmpty()) View.VISIBLE else View.GONE
