@@ -26,7 +26,11 @@ data class DiscoveredNode(
  */
 class PiDeviceDiscovery(context: Context) {
 
-    private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
+    private val nsdManager = try {
+        context.applicationContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
+    } catch (e: Exception) {
+        null
+    }
     private val _nodes = MutableStateFlow<List<DiscoveredNode>>(emptyList())
     val nodes: StateFlow<List<DiscoveredNode>> = _nodes.asStateFlow()
 

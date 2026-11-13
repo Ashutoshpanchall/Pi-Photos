@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -137,7 +138,7 @@ class AlbumsRepository(
         awaitClose {
             db.invalidationTracker.removeObserver(observer)
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     fun getItemsForAlbum(albumId: Long): Flow<List<LocalMediaItem>> = callbackFlow {
         val index = LocalMediaIndex.getInstance(context)
@@ -168,5 +169,5 @@ class AlbumsRepository(
             mediaJob.cancel()
             db.invalidationTracker.removeObserver(observer)
         }
-    }
+    }.flowOn(Dispatchers.IO)
 }
