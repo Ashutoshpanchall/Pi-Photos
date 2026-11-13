@@ -1,5 +1,6 @@
 package com.example.piphotos
 
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.view.LayoutInflater
@@ -17,6 +18,7 @@ import coil.load
 import coil.request.Disposable
 import coil.size.Scale
 import com.example.piphotos.media.LocalMediaItem
+import com.example.piphotos.media.ThumbnailLoader
 import java.util.Locale
 
 class PhotoPagerAdapter(
@@ -30,6 +32,12 @@ class PhotoPagerAdapter(
     private var activePlayer: ExoPlayer? = null
     private var activePlayerPosition: Int = -1
     private var areControlsVisible: Boolean = true
+
+    var isScrubbing: Boolean = false
+
+    fun loadFullResolution(position: Int) {
+        attachedHolders[position]?.loadFullResolution()
+    }
 
     fun getItem(position: Int): LocalMediaItem? {
         return items.getOrNull(position)
@@ -112,7 +120,7 @@ class PhotoPagerAdapter(
         holder.recycle()
     }
 
-    class PhotoViewHolder(
+    inner class PhotoViewHolder(
         itemView: View,
         private val onSingleTap: () -> Unit,
         private val onZoomStateChanged: (position: Int, isZoomed: Boolean) -> Unit
@@ -133,6 +141,7 @@ class PhotoPagerAdapter(
         private var progressCallback: ((Long, Long, Boolean) -> Unit)? = null
         private var imageDisposable: Disposable? = null
         private var posterDisposable: Disposable? = null
+        private var thumbnailSignal: CancellationSignal? = null
 
         private val progressUpdateRunnable = object : Runnable {
             override fun run() {
@@ -237,6 +246,8 @@ class PhotoPagerAdapter(
             // Cancel any pending decode requests on rebind
             imageDisposable?.dispose()
             posterDisposable?.dispose()
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
 
             if (item.isVideo) {
                 zoomImageView.visibility = View.GONE
@@ -267,12 +278,49 @@ class PhotoPagerAdapter(
                 zoomImageView.scaleY = 1.0f
                 zoomImageView.alpha = 1.0f
 
-                imageDisposable = zoomImageView.load(item.contentUri) {
-                    size(2048, 2048)
-                    scale(Scale.FIT)
-                    crossfade(180)
-                    error(R.color.surface_card)
+                if (isScrubbing) {
+                    loadScrubThumbnail(item)
+                } else {
+                    loadFullResolutionInternal(item)
                 }
+            }
+        }
+
+        fun loadScrubThumbnail(item: LocalMediaItem) {
+            imageDisposable?.dispose()
+            imageDisposable = null
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
+
+            val cached = ThumbnailLoader.getFromCache(item, 640) ?: ThumbnailLoader.getFromCache(item, 280)
+            if (cached != null && !cached.isRecycled) {
+                zoomImageView.setImageBitmap(cached)
+            } else {
+                thumbnailSignal = ThumbnailLoader.loadThumbnail(itemView.context, item, 640) { bitmap ->
+                    zoomImageView.setImageBitmap(bitmap)
+                }
+            }
+        }
+
+        fun loadFullResolution() {
+            val item = currentItem ?: return
+            if (item.isVideo) return
+            loadFullResolutionInternal(item)
+        }
+
+        private fun loadFullResolutionInternal(item: LocalMediaItem) {
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
+
+            val cachedPreview = ThumbnailLoader.getFromCache(item, 640) ?: ThumbnailLoader.getFromCache(item, 280)
+            imageDisposable = zoomImageView.load(item.contentUri) {
+                size(2048, 2048)
+                scale(Scale.FIT)
+                crossfade(150)
+                if (cachedPreview != null && !cachedPreview.isRecycled) {
+                    placeholder(android.graphics.drawable.BitmapDrawable(itemView.resources, cachedPreview))
+                }
+                error(R.color.surface_card)
             }
         }
 
@@ -311,6 +359,8 @@ class PhotoPagerAdapter(
         }
 
         fun recycle() {
+            thumbnailSignal?.cancel()
+            thumbnailSignal = null
             imageDisposable?.dispose()
             imageDisposable = null
             posterDisposable?.dispose()

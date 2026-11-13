@@ -272,10 +272,12 @@ class PhotoViewerActivity : AppCompatActivity() {
                     RecyclerView.SCROLL_STATE_DRAGGING -> {
                         isUserDraggingFilmstrip = true
                         isSyncingFromPager = false
+                        adapter.isScrubbing = true
                     }
                     RecyclerView.SCROLL_STATE_IDLE -> {
                         isUserDraggingFilmstrip = false
                         isSyncingFromPager = false
+                        adapter.isScrubbing = false
                         handler.removeCallbacks(filmstripScrubRunnable)
                         val centerPos = FilmstripCenterHelper.findCenterItemPosition(recyclerView)
                         if (centerPos in 0 until mediaItems.size) {
@@ -286,6 +288,7 @@ class PhotoViewerActivity : AppCompatActivity() {
                                 adapter.resetZoomExcept(centerPos)
                                 currentPageZoomed = false
                             }
+                            adapter.loadFullResolution(centerPos)
                             attachActivePlayerToCurrentPage(autoplay = true)
                             updateHeaderAndFavoriteState()
                         }

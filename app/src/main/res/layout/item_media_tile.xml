@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<com.example.piphotos.media.SquareFrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -8,20 +8,16 @@
     <!-- Square Photo View (Sharp straight edges) -->
     <ImageView
         android:id="@+id/ivMediaPhoto"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:scaleType="centerCrop"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintDimensionRatio="1:1"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop" />
 
     <!-- Video Duration Overlay -->
     <LinearLayout
         android:id="@+id/layoutVideoBadge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
         android:layout_margin="6dp"
         android:background="@drawable/bg_video_duration"
         android:gravity="center_vertical"
@@ -30,9 +26,7 @@
         android:paddingTop="2dp"
         android:paddingEnd="6dp"
         android:paddingBottom="2dp"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
+        android:visibility="gone">
 
         <ImageView
             android:layout_width="10dp"
@@ -56,23 +50,21 @@
         android:id="@+id/ivFavoriteBadge"
         android:layout_width="16dp"
         android:layout_height="16dp"
+        android:layout_gravity="bottom|start"
         android:layout_margin="6dp"
         android:src="@drawable/ic_heart"
         android:visibility="gone"
-        app:tint="@color/status_amber"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        app:tint="@color/status_amber" />
 
     <!-- Selection Checkmark Circle Overlay -->
     <FrameLayout
         android:id="@+id/layoutCheckOverlay"
         android:layout_width="24dp"
         android:layout_height="24dp"
+        android:layout_gravity="top|end"
         android:layout_margin="6dp"
         android:background="@drawable/bg_selection_circle_unselected"
-        android:visibility="gone"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
+        android:visibility="gone">
 
         <ImageView
             android:id="@+id/ivCheckIcon"
@@ -84,5 +76,4 @@
             app:tint="@color/white" />
     </FrameLayout>
 
-</androidx.constraintlayout.widget.ConstraintLayout>
-
+</com.example.piphotos.media.SquareFrameLayout>

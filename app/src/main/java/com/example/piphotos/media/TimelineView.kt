@@ -81,8 +81,15 @@ class TimelineView @JvmOverloads constructor(
         lookup.isSpanIndexCacheEnabled = true
         gridLayoutManager.spanSizeLookup = lookup
 
-        binding.rvTimelineGrid.layoutManager = gridLayoutManager
-        binding.rvTimelineGrid.adapter = adapter
+        binding.rvTimelineGrid.apply {
+            setHasFixedSize(true)
+            setItemViewCacheSize(24)
+            recycledViewPool.setMaxRecycledViews(TimelineAdapter.VIEW_TYPE_MEDIA, 40)
+            recycledViewPool.setMaxRecycledViews(TimelineAdapter.VIEW_TYPE_HEADER, 10)
+            (itemAnimator as? androidx.recyclerview.widget.SimpleItemAnimator)?.supportsChangeAnimations = false
+            layoutManager = gridLayoutManager
+            adapter = this@TimelineView.adapter
+        }
 
         setupPinchToZoom()
         setupFastScroller()
@@ -146,11 +153,35 @@ class TimelineView @JvmOverloads constructor(
                 super.onScrolled(recyclerView, dx, dy)
                 if (dy != 0) {
                     showFastScrollTrack()
+                    prefetchVisibleDirection(dy)
                 }
                 updateFastScrollThumb()
                 updateStickyHeader()
             }
         })
+    }
+
+    private fun prefetchVisibleDirection(dy: Int) {
+        val list = adapter.currentList
+        if (list.isEmpty()) return
+
+        val prefetchItems = if (dy > 0) {
+            val lastVisible = gridLayoutManager.findLastVisibleItemPosition()
+            if (lastVisible < 0 || lastVisible >= list.size - 1) return
+            val start = lastVisible + 1
+            val end = (lastVisible + 24).coerceAtMost(list.size - 1)
+            (start..end).mapNotNull { (list.getOrNull(it) as? TimelineRow.MediaRow)?.item }
+        } else {
+            val firstVisible = gridLayoutManager.findFirstVisibleItemPosition()
+            if (firstVisible <= 0) return
+            val start = (firstVisible - 24).coerceAtLeast(0)
+            val end = firstVisible - 1
+            (end downTo start).mapNotNull { (list.getOrNull(it) as? TimelineRow.MediaRow)?.item }
+        }
+
+        if (prefetchItems.isNotEmpty()) {
+            ThumbnailLoader.prefetch(context, prefetchItems, targetSizePx = 280)
+        }
     }
 
     private fun showFastScrollTrack() {

@@ -107,8 +107,8 @@ class FilmstripAdapter(
             thumbnailSignal?.cancel()
             thumbnailSignal = null
 
-            // Instant 60fps cache check or bounded native MediaStore thumbnail decode
-            val cached = ThumbnailLoader.getFromCache(item.id)
+            // Instant cache check or bounded native MediaStore thumbnail decode
+            val cached = ThumbnailLoader.getFromCache(item, 120)
             if (cached != null && !cached.isRecycled) {
                 ivThumbnail.setImageBitmap(cached)
             } else {
@@ -116,7 +116,10 @@ class FilmstripAdapter(
                 thumbnailSignal = ThumbnailLoader.loadThumbnail(
                     context = itemView.context,
                     item = item,
-                    targetSizePx = 120
+                    targetSizePx = 120,
+                    onError = {
+                        ivThumbnail.setImageResource(R.drawable.ic_broken_image)
+                    }
                 ) { bitmap ->
                     ivThumbnail.setImageBitmap(bitmap)
                 }

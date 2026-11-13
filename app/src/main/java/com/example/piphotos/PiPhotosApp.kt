@@ -5,6 +5,7 @@ import android.os.StrictMode
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
+import com.example.piphotos.media.ThumbnailLoader
 
 class PiPhotosApp : Application(), ImageLoaderFactory {
 
@@ -24,6 +25,11 @@ class PiPhotosApp : Application(), ImageLoaderFactory {
                     .build()
             )
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        ThumbnailLoader.onTrimMemory(level)
     }
 
     override fun newImageLoader(): ImageLoader {

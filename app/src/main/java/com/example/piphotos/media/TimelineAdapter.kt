@@ -193,7 +193,7 @@ class TimelineAdapter(
             thumbnailSignal?.cancel()
             thumbnailSignal = null
 
-            val cached = ThumbnailLoader.getFromCache(item.id)
+            val cached = ThumbnailLoader.getFromCache(item, 280)
             if (cached != null && !cached.isRecycled) {
                 binding.ivMediaPhoto.setImageBitmap(cached)
             } else {
@@ -201,7 +201,10 @@ class TimelineAdapter(
                 thumbnailSignal = ThumbnailLoader.loadThumbnail(
                     context = binding.root.context,
                     item = item,
-                    targetSizePx = 280
+                    targetSizePx = 280,
+                    onError = {
+                        binding.ivMediaPhoto.setImageResource(R.drawable.ic_broken_image)
+                    }
                 ) { bitmap ->
                     binding.ivMediaPhoto.setImageBitmap(bitmap)
                 }
