@@ -50,6 +50,10 @@ class BackupFragment : Fragment() {
             showPairedNodeActionDialog()
         }
 
+        binding.iconCloudUpload.setOnClickListener {
+            showPairedNodeActionDialog()
+        }
+
         binding.btnRetry.setOnClickListener {
             val context = requireContext()
             if (SyncNodePreferences.isPaired(context)) {
@@ -302,25 +306,35 @@ class BackupFragment : Fragment() {
         val context = requireContext()
         val pairedNode = SyncNodePreferences.getPairedNode(context) ?: return
 
-        val options = arrayOf("Sync Now (Force Over Any Network)", "Switch or Unpair Node", "Cancel")
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val isWifi = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+
+        val isLocalIp = pairedNode.endpointUrl.contains("192.168.") || 
+            pairedNode.endpointUrl.contains("://10.") || 
+            pairedNode.endpointUrl.contains(".local") || 
+            pairedNode.endpointUrl.contains("://127.") ||
+            pairedNode.endpointUrl.contains("localhost")
+
+        val wifiNotice = if (!isWifi && isLocalIp) {
+            "\n\n⚠️ Your phone is currently on mobile data (5G). Local private IP addresses like ${pairedNode.endpointUrl} are only reachable when connected to the same Wi-Fi network as the vault."
+        } else ""
+
         AlertDialog.Builder(context)
             .setTitle(pairedNode.nodeName)
-            .setMessage("Endpoint: ${pairedNode.endpointUrl}\n\nTap 'Sync Now' to start media transfer immediately.")
-            .setItems(options) { dialog, which ->
-                when (which) {
-                    0 -> {
-                        MediaSyncWorker.enqueueImmediateSync(context, force = true)
-                        Toast.makeText(context, "Immediate sync started", Toast.LENGTH_SHORT).show()
-                    }
-                    1 -> {
-                        SyncNodePreferences.clearPairedNode(context)
-                        MediaSyncWorker.cancelSync(context)
-                        updateBackupUiState()
-                        Toast.makeText(context, "Storage node disconnected", Toast.LENGTH_SHORT).show()
-                    }
-                }
+            .setMessage("Endpoint: ${pairedNode.endpointUrl}$wifiNotice")
+            .setPositiveButton("Sync Now") { dialog, _ ->
+                MediaSyncWorker.enqueueImmediateSync(context, force = true)
+                Toast.makeText(context, "Sync started", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
+            .setNegativeButton("Disconnect") { dialog, _ ->
+                SyncNodePreferences.clearPairedNode(context)
+                MediaSyncWorker.cancelSync(context)
+                updateBackupUiState()
+                Toast.makeText(context, "Storage node disconnected", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+            .setNeutralButton("Cancel", null)
             .show()
     }
 
