@@ -1,14 +1,17 @@
 package com.example.piphotos.sync
 
 import android.app.AlertDialog
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.piphotos.R
 import com.example.piphotos.databinding.BottomSheetDevicePairingBinding
@@ -17,8 +20,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * Bottom sheet dialog for discovering storage nodes on the local Wi-Fi via mDNS
- * or connecting directly via manual host/IP address.
+ * Bottom sheet dialog for discovering storage nodes on the local Wi-Fi via mDNS / subnet scan,
+ * entering address manually, or scanning/pasting QR code payloads, backed by a 6-step live verification pipeline.
  */
 class DevicePairingBottomSheet(
     private val onPaired: ((PairedNode) -> Unit)? = null
@@ -28,6 +31,8 @@ class DevicePairingBottomSheet(
     private val binding get() = _binding!!
 
     private var discovery: PiDeviceDiscovery? = null
+    private var validator: NodePairingValidator? = null
+    private var selectedTlsFingerprint: String? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -43,32 +48,76 @@ class DevicePairingBottomSheet(
 
         val context = requireContext()
         discovery = PiDeviceDiscovery(context)
+        validator = NodePairingValidator(context)
 
+        // Observe Discovery UI State
         viewLifecycleOwner.lifecycleScope.launch {
-            discovery?.nodes?.collectLatest { nodes ->
-                renderNodes(nodes)
+            discovery?.uiState?.collectLatest { state ->
+                renderDiscoveryState(state)
             }
         }
 
         binding.btnManualPairing.setOnClickListener {
-            showManualPairingDialog()
+            showManualForm()
+        }
+
+        binding.btnEnterAddressManual.setOnClickListener {
+            showManualForm()
+        }
+
+        binding.btnRescan.setOnClickListener {
+            discovery?.startDiscovery()
+        }
+
+        binding.btnScanQr.setOnClickListener {
+            showQrInputDialog()
+        }
+
+        binding.btnCancelForm.setOnClickListener {
+            binding.layoutManualForm.visibility = View.GONE
+            binding.layoutDiscoveryContainer.visibility = View.VISIBLE
+            discovery?.startDiscovery()
+        }
+
+        binding.btnVerifyAndConnect.setOnClickListener {
+            startLiveVerification()
         }
 
         discovery?.startDiscovery()
     }
 
-    private fun renderNodes(nodes: List<DiscoveredNode>) {
-        val container = binding.layoutNodesList
-        container.removeAllViews()
-
-        if (nodes.isEmpty()) {
-            binding.tvDiscoveryStatus.text = "Scanning local Wi-Fi via mDNS..."
-            binding.progressDiscovery.visibility = View.VISIBLE
+    private fun renderDiscoveryState(state: DiscoveryUiState) {
+        if (binding.layoutManualForm.visibility == View.VISIBLE) {
+            // User is currently filling the manual form
             return
         }
 
-        binding.tvDiscoveryStatus.text = "Found ${nodes.size} node(s) on local network"
-        binding.progressDiscovery.visibility = View.GONE
+        when (state) {
+            is DiscoveryUiState.Scanning -> {
+                binding.tvDiscoveryStatus.text = "Scanning local Wi-Fi... (${state.secondsRemaining}s)"
+                binding.progressDiscovery.visibility = View.VISIBLE
+                binding.layoutDiscoveryContainer.visibility = View.VISIBLE
+                binding.layoutNothingFound.visibility = View.GONE
+            }
+            is DiscoveryUiState.Found -> {
+                binding.tvDiscoveryStatus.text = "Found ${state.nodes.size} node(s) on local network"
+                binding.progressDiscovery.visibility = View.GONE
+                binding.layoutDiscoveryContainer.visibility = View.VISIBLE
+                binding.layoutNothingFound.visibility = View.GONE
+                renderDiscoveredNodes(state.nodes)
+            }
+            is DiscoveryUiState.NothingFound -> {
+                binding.tvDiscoveryStatus.text = "Scan completed"
+                binding.progressDiscovery.visibility = View.GONE
+                binding.layoutDiscoveryContainer.visibility = View.GONE
+                binding.layoutNothingFound.visibility = View.VISIBLE
+            }
+        }
+    }
+
+    private fun renderDiscoveredNodes(nodes: List<DiscoveredNode>) {
+        val container = binding.layoutNodesList
+        container.removeAllViews()
 
         val inflater = LayoutInflater.from(requireContext())
         for (node in nodes) {
@@ -78,10 +127,16 @@ class DevicePairingBottomSheet(
             val btnConnect = itemView.findViewById<TextView>(R.id.btnConnectNode)
 
             tvName.text = node.name
-            tvEndpoint.text = node.endpointUrl
+            val fpSnippet = if (node.tlsFingerprint != null) " • ${node.tlsFingerprint.take(11)}..." else ""
+            tvEndpoint.text = "${node.endpointUrl}$fpSnippet"
 
             val clickListener = View.OnClickListener {
-                pairNode(node.name, node.endpointUrl)
+                showManualForm(
+                    host = node.hostAddress,
+                    port = node.port,
+                    tlsFingerprint = node.tlsFingerprint,
+                    suggestedName = node.name
+                )
             }
             itemView.setOnClickListener(clickListener)
             btnConnect.setOnClickListener(clickListener)
@@ -90,80 +145,192 @@ class DevicePairingBottomSheet(
         }
     }
 
-    private fun pairNode(name: String, endpointUrl: String, token: String = "") {
-        val context = requireContext()
-        SyncNodePreferences.savePairedNode(context, name, endpointUrl, token)
-        MediaSyncWorker.schedulePeriodicSync(context)
-        MediaSyncWorker.enqueueImmediateSync(context)
+    fun showManualForm(
+        host: String = "",
+        port: Int = 8443,
+        tlsFingerprint: String? = null,
+        suggestedName: String? = null
+    ) {
+        discovery?.stopDiscovery()
+        selectedTlsFingerprint = tlsFingerprint
 
-        val paired = SyncNodePreferences.getPairedNode(context)
-        if (paired != null) {
-            onPaired?.invoke(paired)
+        binding.layoutDiscoveryContainer.visibility = View.GONE
+        binding.layoutNothingFound.visibility = View.GONE
+        binding.layoutManualForm.visibility = View.VISIBLE
+        binding.layoutLiveSteps.visibility = View.GONE
+        binding.tvValidationErrorMessage.visibility = View.GONE
+
+        if (host.isNotEmpty()) {
+            binding.etHostAddress.setText(host)
         }
-
-        Toast.makeText(context, "Paired with $name. Sync initiated.", Toast.LENGTH_SHORT).show()
-        dismiss()
+        binding.etPort.setText(port.toString())
+        binding.tvFormTitle.text = if (!suggestedName.isNullOrEmpty()) {
+            "Pair with $suggestedName"
+        } else {
+            "Enter Server Address & Pairing Code"
+        }
+        binding.etPairingCode.requestFocus()
     }
 
-    private fun showManualPairingDialog() {
+    private fun showQrInputDialog() {
         val context = requireContext()
-        val layout = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(50, 30, 50, 10)
+        val input = EditText(context).apply {
+            hint = "Paste QR code content from server"
+            setPadding(40, 30, 40, 30)
         }
-
-        val inputHost = EditText(context).apply {
-            hint = "Host or IP (e.g. 192.168.1.100)"
-            setSingleLine()
-        }
-        val inputPort = EditText(context).apply {
-            hint = "Port (default: 8080)"
-            setText("8080")
-            setSingleLine()
-        }
-        val inputToken = EditText(context).apply {
-            hint = "Auth Token (optional)"
-            setSingleLine()
-        }
-
-        layout.addView(inputHost)
-        layout.addView(inputPort)
-        layout.addView(inputToken)
 
         AlertDialog.Builder(context)
-            .setTitle("Manual Node Setup")
-            .setView(layout)
-            .setPositiveButton("Connect") { _, _ ->
-                val host = inputHost.text.toString().trim()
-                val portStr = inputPort.text.toString().trim()
-                val token = inputToken.text.toString().trim()
-
-                if (host.isEmpty()) {
-                    Toast.makeText(context, "Host or IP cannot be empty", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-
-                val port = portStr.toIntOrNull() ?: 8080
-                val endpointUrl = if (host.startsWith("http://") || host.startsWith("https://")) {
-                    host
+            .setTitle("Scan / Paste Server QR Code")
+            .setMessage("Paste the JSON or URI payload printed by the server terminal:")
+            .setView(input)
+            .setPositiveButton("Use") { _, _ ->
+                val rawText = input.text.toString().trim()
+                val parsed = NodePairingValidator.parseQrCode(rawText)
+                if (parsed != null) {
+                    showManualForm(
+                        host = parsed.host,
+                        port = parsed.port,
+                        tlsFingerprint = parsed.tlsFingerprint
+                    )
+                    if (!parsed.code.isNullOrEmpty()) {
+                        binding.etPairingCode.setText(parsed.code)
+                    }
                 } else {
-                    "http://$host:$port"
+                    Toast.makeText(context, "Could not parse QR code payload", Toast.LENGTH_SHORT).show()
                 }
-
-                pairNode("Home Vault", endpointUrl, token)
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
+    private fun startLiveVerification() {
+        val host = binding.etHostAddress.text.toString().trim()
+        val portStr = binding.etPort.text.toString().trim()
+        val code = binding.etPairingCode.text.toString().trim()
+
+        if (host.isEmpty()) {
+            binding.etHostAddress.error = "Host or IP required"
+            return
+        }
+        val port = portStr.toIntOrNull()
+        if (port == null || port !in 1..65535) {
+            binding.etPort.error = "Invalid port"
+            return
+        }
+        if (code.length != 6) {
+            binding.etPairingCode.error = "Pairing code must be 6 digits"
+            return
+        }
+
+        binding.layoutLiveSteps.visibility = View.VISIBLE
+        binding.tvValidationErrorMessage.visibility = View.GONE
+        binding.btnVerifyAndConnect.isEnabled = false
+
+        // Reset step views
+        resetStepView(binding.iconStep1, binding.tvStep1, "Resolve hostname")
+        resetStepView(binding.iconStep2, binding.tvStep2, "TCP connect")
+        resetStepView(binding.iconStep3, binding.tvStep3, "PiPhotos handshake (/api/v1/info)")
+        resetStepView(binding.iconStep4, binding.tvStep4, "Verify TLS certificate fingerprint")
+        resetStepView(binding.iconStep5, binding.tvStep5, "Validate pairing code")
+        resetStepView(binding.iconStep6, binding.tvStep6, "Check storage capacity")
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = validator?.executeValidation(
+                rawHost = host,
+                port = port,
+                pairingCode = code,
+                providedTlsFp = selectedTlsFingerprint,
+                onStepUpdate = { step, state ->
+                    lifecycleScope.launch {
+                        updateStepUi(step, state)
+                    }
+                }
+            )
+
+            binding.btnVerifyAndConnect.isEnabled = true
+
+            when (result) {
+                is PairingValidationResult.Success -> {
+                    val context = requireContext()
+                    val node = result.pairedNode
+                    SyncNodePreferences.savePairedNode(
+                        context = context,
+                        name = node.nodeName,
+                        endpointUrl = node.endpointUrl,
+                        authToken = node.authToken,
+                        tlsFingerprint = node.tlsFingerprint,
+                        userId = node.userId,
+                        deviceId = node.deviceId,
+                        serverId = node.serverId
+                    )
+                    MediaSyncWorker.schedulePeriodicSync(context)
+                    MediaSyncWorker.enqueueImmediateSync(context)
+
+                    onPaired?.invoke(node)
+                    Toast.makeText(context, "Paired with ${node.nodeName}!", Toast.LENGTH_SHORT).show()
+                    dismiss()
+                }
+                is PairingValidationResult.Failure -> {
+                    binding.tvValidationErrorMessage.text = result.errorMessage
+                    binding.tvValidationErrorMessage.visibility = View.VISIBLE
+                }
+                null -> {}
+            }
+        }
+    }
+
+    private fun updateStepUi(step: LiveCheckStep, state: LiveCheckStepState) {
+        val (icon, tv) = when (step) {
+            LiveCheckStep.RESOLVE_NAME -> Pair(binding.iconStep1, binding.tvStep1)
+            LiveCheckStep.TCP_CONNECT -> Pair(binding.iconStep2, binding.tvStep2)
+            LiveCheckStep.CHECK_SERVER_INFO -> Pair(binding.iconStep3, binding.tvStep3)
+            LiveCheckStep.CHECK_CERTIFICATE -> Pair(binding.iconStep4, binding.tvStep4)
+            LiveCheckStep.SUBMIT_PAIRING_CODE -> Pair(binding.iconStep5, binding.tvStep5)
+            LiveCheckStep.CHECK_FREE_SPACE -> Pair(binding.iconStep6, binding.tvStep6)
+        }
+
+        val context = requireContext()
+        when (state) {
+            is LiveCheckStepState.Pending -> {
+                resetStepView(icon, tv, step.displayName)
+            }
+            is LiveCheckStepState.Running -> {
+                icon.setImageResource(R.drawable.ic_clock)
+                icon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(context, R.color.primary_blue))
+                tv.text = "${step.displayName} (checking...)"
+                tv.setTextColor(ContextCompat.getColor(context, R.color.text_primary))
+            }
+            is LiveCheckStepState.Passed -> {
+                icon.setImageResource(R.drawable.ic_check_circle)
+                icon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(context, R.color.status_green))
+                val detail = if (state.message.isNotEmpty()) ": ${state.message}" else ""
+                tv.text = "${step.displayName}$detail"
+                tv.setTextColor(ContextCompat.getColor(context, R.color.text_primary))
+            }
+            is LiveCheckStepState.Failed -> {
+                icon.setImageResource(R.drawable.ic_close)
+                icon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(context, R.color.status_red))
+                tv.text = "${step.displayName}: Failed"
+                tv.setTextColor(ContextCompat.getColor(context, R.color.status_red))
+            }
+        }
+    }
+
+    private fun resetStepView(icon: ImageView, tv: TextView, text: String) {
+        val context = context ?: return
+        icon.setImageResource(R.drawable.ic_clock)
+        icon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(context, R.color.text_tertiary))
+        tv.text = text
+        tv.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
+    }
+
     override fun onDestroyView() {
         discovery?.stopDiscovery()
-        super.onDestroyView()
         _binding = null
+        super.onDestroyView()
     }
 
     companion object {
         const val TAG = "DevicePairingBottomSheet"
     }
 }
-

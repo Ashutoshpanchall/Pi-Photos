@@ -13,17 +13,26 @@ import android.view.ViewGroup
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.example.piphotos.databinding.FragmentBackupBinding
+import com.example.piphotos.net.PiHttpClient
+import com.example.piphotos.sync.ConnectionState
+import com.example.piphotos.sync.ConnectionStateMonitor
 import com.example.piphotos.sync.DevicePairingBottomSheet
 import com.example.piphotos.sync.MediaSyncWorker
 import com.example.piphotos.sync.SyncNodePreferences
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 class BackupFragment : Fragment() {
 
     private var _binding: FragmentBackupBinding? = null
     private val binding get() = _binding!!
+
+    private var connectionMonitor: ConnectionStateMonitor? = null
+    private var lastObservedConnectionState: ConnectionState = ConnectionState.NotConfigured
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -37,12 +46,40 @@ class BackupFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        val context = requireContext()
+        connectionMonitor = ConnectionStateMonitor(context)
+
+        // Observe persistent connection state
+        viewLifecycleOwner.lifecycleScope.launch {
+            connectionMonitor?.connectionState?.collectLatest { state ->
+                lastObservedConnectionState = state
+                renderConnectionState(state)
+            }
+        }
+
+        binding.layoutConnectionChip.setOnClickListener {
+            val ctx = context
+            if (SyncNodePreferences.isPaired(ctx)) {
+                showPairedNodeActionDialog()
+            } else {
+                DevicePairingBottomSheet {
+                    updateBackupUiState()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        connectionMonitor?.checkNow()
+                    }
+                }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
+            }
+        }
+
         updateBackupUiState()
         updateMonitoredFoldersUi()
 
         binding.btnSetupPi.setOnClickListener {
             DevicePairingBottomSheet {
                 updateBackupUiState()
+                viewLifecycleOwner.lifecycleScope.launch {
+                    connectionMonitor?.checkNow()
+                }
             }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
         }
 
@@ -55,14 +92,17 @@ class BackupFragment : Fragment() {
         }
 
         binding.btnRetry.setOnClickListener {
-            val context = requireContext()
-            if (SyncNodePreferences.isPaired(context)) {
-                MediaSyncWorker.enqueueImmediateSync(context, force = true)
+            val ctx = requireContext()
+            if (SyncNodePreferences.isPaired(ctx)) {
+                MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
                 binding.layoutAttentionRequired.visibility = View.GONE
-                Toast.makeText(context, "Retrying media sync...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "Retrying media sync...", Toast.LENGTH_SHORT).show()
             } else {
                 DevicePairingBottomSheet {
                     updateBackupUiState()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        connectionMonitor?.checkNow()
+                    }
                 }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
             }
         }
@@ -81,29 +121,29 @@ class BackupFragment : Fragment() {
         binding.switchVideos.isChecked = BackupPreferences.isIncludeVideos(requireContext())
 
         binding.switchWifi.setOnCheckedChangeListener { _, isChecked ->
-            val context = requireContext()
-            BackupPreferences.setWifiOnly(context, isChecked)
-            MediaSyncWorker.schedulePeriodicSync(context)
+            val ctx = requireContext()
+            BackupPreferences.setWifiOnly(ctx, isChecked)
+            MediaSyncWorker.schedulePeriodicSync(ctx)
             updateBackupUiState()
             val msg = if (isChecked) "Sync constrained to Wi-Fi" else "Cellular sync allowed"
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
         }
 
         binding.switchCharging.setOnCheckedChangeListener { _, isChecked ->
-            val context = requireContext()
-            BackupPreferences.setChargingOnly(context, isChecked)
-            MediaSyncWorker.schedulePeriodicSync(context)
+            val ctx = requireContext()
+            BackupPreferences.setChargingOnly(ctx, isChecked)
+            MediaSyncWorker.schedulePeriodicSync(ctx)
             updateBackupUiState()
             val msg = if (isChecked) "Sync will pause unless plugged in" else "Sync on battery active"
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
         }
 
         binding.switchVideos.setOnCheckedChangeListener { _, isChecked ->
-            val context = requireContext()
-            BackupPreferences.setIncludeVideos(context, isChecked)
-            MediaSyncWorker.schedulePeriodicSync(context)
+            val ctx = requireContext()
+            BackupPreferences.setIncludeVideos(ctx, isChecked)
+            MediaSyncWorker.schedulePeriodicSync(ctx)
             val msg = if (isChecked) "Video upload included (MP4/MOV)" else "Videos excluded from sync"
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
         }
 
         observeSyncWork()
@@ -113,6 +153,70 @@ class BackupFragment : Fragment() {
         super.onResume()
         updateBackupUiState()
         updateMonitoredFoldersUi()
+        connectionMonitor?.start(viewLifecycleOwner.lifecycleScope)
+    }
+
+    override fun onPause() {
+        connectionMonitor?.stop()
+        super.onPause()
+    }
+
+    private fun renderConnectionState(state: ConnectionState) {
+        val context = context ?: return
+        val paired = SyncNodePreferences.getPairedNode(context)
+
+        when (state) {
+            is ConnectionState.NotConfigured -> {
+                binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
+                    ContextCompat.getColor(context, R.color.primary_blue)
+                )
+                binding.tvBackupSubtitle.text = "Local Storage · Private & Offline"
+            }
+            is ConnectionState.Connected -> {
+                binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
+                    ContextCompat.getColor(context, R.color.status_green)
+                )
+                val nodeName = paired?.nodeName ?: "Home Vault"
+                binding.tvBackupSubtitle.text = "Connected to $nodeName"
+
+                val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
+                if (lastSync > 0L) {
+                    val formatted = DateUtils.getRelativeTimeSpanString(
+                        lastSync,
+                        System.currentTimeMillis(),
+                        DateUtils.MINUTE_IN_MILLIS
+                    )
+                    binding.tvBackupProgressSubtitle.text = "Last synced $formatted"
+                } else {
+                    binding.tvBackupProgressSubtitle.text = "Connected · Ready to sync"
+                }
+            }
+            is ConnectionState.ReachableAuthNeeded -> {
+                binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
+                    ContextCompat.getColor(context, R.color.status_amber)
+                )
+                val nodeName = paired?.nodeName ?: "Storage Node"
+                binding.tvBackupSubtitle.text = "$nodeName · Sign-in needed"
+                binding.tvBackupProgressSubtitle.text = "Authentication required (tap to re-pair)"
+            }
+            is ConnectionState.Unreachable -> {
+                binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
+                    ContextCompat.getColor(context, R.color.status_red)
+                )
+                val nodeName = paired?.nodeName ?: "Storage Node"
+                val lastSeenText = if (state.lastSeenMs > 0L) {
+                    DateUtils.getRelativeTimeSpanString(
+                        state.lastSeenMs,
+                        System.currentTimeMillis(),
+                        DateUtils.MINUTE_IN_MILLIS
+                    )
+                } else {
+                    "offline"
+                }
+                binding.tvBackupSubtitle.text = "$nodeName · Offline ($lastSeenText)"
+                binding.tvBackupProgressSubtitle.text = "Unreachable · Ensure phone & Pi on same Wi-Fi"
+            }
+        }
     }
 
     private fun updateMonitoredFoldersUi() {
@@ -147,29 +251,10 @@ class BackupFragment : Fragment() {
         binding.cardBackupProgress.visibility = if (isPaired) View.VISIBLE else View.GONE
 
         if (isPaired) {
-            binding.tvBackupSubtitle.text = "Connected to ${pairedNode!!.nodeName}"
-            binding.tvBackupProgressTitle.text = pairedNode.nodeName
-
-            val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
-            if (lastSync > 0L) {
-                val formatted = DateUtils.getRelativeTimeSpanString(
-                    lastSync,
-                    System.currentTimeMillis(),
-                    DateUtils.MINUTE_IN_MILLIS
-                )
-                binding.tvBackupProgressSubtitle.text = "Last synced $formatted"
-            } else {
-                val wifiOnly = BackupPreferences.isWifiOnly(context)
-                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                val isWifi = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-                if (wifiOnly && !isWifi) {
-                    binding.tvBackupProgressSubtitle.text = "Paused · Waiting for Wi-Fi network"
-                } else {
-                    binding.tvBackupProgressSubtitle.text = "Connected · Ready to sync"
-                }
-            }
+            binding.tvBackupProgressTitle.text = pairedNode!!.nodeName
+            renderConnectionState(lastObservedConnectionState)
         } else {
-            binding.tvBackupSubtitle.text = "Local Storage · Private & Offline"
+            renderConnectionState(ConnectionState.NotConfigured)
             binding.layoutAttentionRequired.visibility = View.GONE
         }
     }
@@ -218,84 +303,51 @@ class BackupFragment : Fragment() {
                     binding.pbBackupProgress.isIndeterminate = false
                     binding.pbBackupProgress.max = total
                     binding.pbBackupProgress.progress = current
-                    binding.tvBackupProgressSubtitle.text = "Backing up $current of $total ($uploaded uploaded)"
-
-                    // Dynamic Speed
-                    if (speedBps > 0) {
-                        val speedMBs = speedBps / (1024.0 * 1024.0)
-                        binding.tvBackupSpeed.text = if (speedMBs >= 1.0) {
-                            String.format("%.1f MB/s", speedMBs)
-                        } else {
-                            "${(speedBps / 1024)} KB/s"
-                        }
-                    } else {
-                        binding.tvBackupSpeed.text = "Verifying"
-                    }
-
-                    // Dynamic ETA
-                    if (etaSec > 0) {
-                        val mins = etaSec / 60
-                        val secs = etaSec % 60
-                        binding.tvBackupEta.text = when {
-                            mins >= 60 -> "${mins / 60}h ${mins % 60}m remaining"
-                            mins > 0 -> "${mins}m remaining"
-                            else -> "${secs}s remaining"
-                        }
-                    } else {
-                        binding.tvBackupEta.text = "${total - current} items left"
-                    }
+                    val pct = ((current.toDouble() / total.toDouble()) * 100).toInt().coerceIn(0, 100)
+                    binding.tvBackupProgressSubtitle.text = "Backing up: $current of $total items ($pct%)"
                 } else {
                     binding.pbBackupProgress.isIndeterminate = true
-                    binding.tvBackupProgressSubtitle.text = "Hashing and verifying media items..."
-                    binding.tvBackupSpeed.text = "Scanning"
-                    binding.tvBackupEta.text = "Calculating..."
+                    binding.tvBackupProgressSubtitle.text = "Scanning & hashing new media..."
                 }
+
+                if (speedBps > 0) {
+                    val speedMb = speedBps / (1024.0 * 1024.0)
+                    binding.tvBackupSpeed.text = String.format("%.1f MB/s", speedMb)
+                } else {
+                    binding.tvBackupSpeed.text = "Hashing..."
+                }
+
+                binding.tvBackupEta.text = formatEta(etaSec)
             }
 
             WorkInfo.State.SUCCEEDED -> {
                 binding.pbBackupProgress.visibility = View.GONE
                 binding.layoutBackupMetrics.visibility = View.GONE
                 binding.layoutAttentionRequired.visibility = View.GONE
-
                 val uploaded = workInfo.outputData.getInt(MediaSyncWorker.KEY_RESULT_UPLOADED, 0)
                 val skipped = workInfo.outputData.getInt(MediaSyncWorker.KEY_RESULT_SKIPPED, 0)
-                val message = workInfo.outputData.getString(MediaSyncWorker.KEY_RESULT_MESSAGE)
+                val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
+                val relativeTime = if (lastSync > 0L) {
+                    DateUtils.getRelativeTimeSpanString(lastSync, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
+                } else "Just now"
 
-                binding.tvBackupProgressSubtitle.text = if (message != null) {
-                    message
+                if (uploaded > 0) {
+                    binding.tvBackupProgressSubtitle.text = "Backed up $uploaded items · $relativeTime"
+                } else if (skipped > 0) {
+                    binding.tvBackupProgressSubtitle.text = "All $skipped items backed up · $relativeTime"
                 } else {
-                    "Up to date · $uploaded uploaded, $skipped already synced"
+                    binding.tvBackupProgressSubtitle.text = "Up to date · $relativeTime"
                 }
             }
 
             WorkInfo.State.FAILED -> {
                 binding.pbBackupProgress.visibility = View.GONE
                 binding.layoutBackupMetrics.visibility = View.GONE
-                binding.layoutAttentionRequired.visibility = View.VISIBLE
-
-                val reason = workInfo.outputData.getString(MediaSyncWorker.KEY_ERROR_REASON)
-                    ?: "Could not reach storage node. Ensure your phone is on the same Wi-Fi as your Pi."
-                binding.tvErrorTitle.text = "Backup Interrupted"
+                val reason = workInfo.outputData.getString(MediaSyncWorker.KEY_ERROR_REASON) 
+                    ?: "Storage node sync interrupted. Check connection."
                 binding.tvErrorReason.text = reason
-                binding.tvBackupProgressSubtitle.text = "Sync paused · Tap to retry"
-            }
-
-            WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> {
-                binding.pbBackupProgress.visibility = View.GONE
-                binding.layoutBackupMetrics.visibility = View.GONE
-
-                val wifiOnly = BackupPreferences.isWifiOnly(context)
-                val chargingOnly = BackupPreferences.isChargingOnly(context)
-                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                val isWifi = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-
-                if (wifiOnly && !isWifi) {
-                    binding.tvBackupProgressSubtitle.text = "Paused · Waiting for Wi-Fi network"
-                } else if (chargingOnly) {
-                    binding.tvBackupProgressSubtitle.text = "Paused · Waiting for charger connection"
-                } else {
-                    binding.tvBackupProgressSubtitle.text = "Sync scheduled · Ready"
-                }
+                binding.layoutAttentionRequired.visibility = View.VISIBLE
+                binding.tvBackupProgressSubtitle.text = "Backup paused · Attention required"
             }
 
             else -> {}
@@ -316,16 +368,28 @@ class BackupFragment : Fragment() {
             pairedNode.endpointUrl.contains("localhost")
 
         val wifiNotice = if (!isWifi && isLocalIp) {
-            "\n\n⚠️ Your phone is currently on mobile data (5G). Local private IP addresses like ${pairedNode.endpointUrl} are only reachable when connected to the same Wi-Fi network as the vault."
+            "\n\n⚠️ Your phone is on cellular data. Local nodes are only reachable when connected to the same Wi-Fi network."
         } else ""
+
+        val fpSnippet = if (pairedNode.tlsFingerprint.isNotEmpty()) "\nTLS: ${pairedNode.tlsFingerprint.take(23)}..." else ""
+        val stateDesc = when (lastObservedConnectionState) {
+            is ConnectionState.Connected -> "Online (Ready to sync)"
+            is ConnectionState.ReachableAuthNeeded -> "Reachable (Auth token required)"
+            is ConnectionState.Unreachable -> "Offline / Unreachable"
+            else -> "Not configured"
+        }
 
         AlertDialog.Builder(context)
             .setTitle(pairedNode.nodeName)
-            .setMessage("Endpoint: ${pairedNode.endpointUrl}$wifiNotice")
+            .setMessage("Status: $stateDesc\nEndpoint: ${pairedNode.endpointUrl}$fpSnippet$wifiNotice")
             .setPositiveButton("Sync Now") { dialog, _ ->
                 MediaSyncWorker.enqueueImmediateSync(context, force = true)
                 Toast.makeText(context, "Sync started", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
+            }
+            .setNeutralButton("Test Connection") { dialog, _ ->
+                dialog.dismiss()
+                testNodeConnection(pairedNode)
             }
             .setNegativeButton("Disconnect") { dialog, _ ->
                 SyncNodePreferences.clearPairedNode(context)
@@ -334,8 +398,47 @@ class BackupFragment : Fragment() {
                 Toast.makeText(context, "Storage node disconnected", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
-            .setNeutralButton("Cancel", null)
             .show()
+    }
+
+    private fun testNodeConnection(pairedNode: com.example.piphotos.sync.PairedNode) {
+        val context = context ?: return
+        Toast.makeText(context, "Probing ${pairedNode.nodeName}...", Toast.LENGTH_SHORT).show()
+        val client = PiHttpClient(context)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val res = client.getStatus(
+                endpointUrl = pairedNode.endpointUrl,
+                authToken = pairedNode.authToken,
+                expectedFingerprint = pairedNode.tlsFingerprint.ifEmpty { null }
+            )
+            if (res.isSuccess) {
+                val status = res.getOrThrow()
+                val freeGb = status.diskFree / (1024 * 1024 * 1024.0)
+                val quotaGb = status.userQuota / (1024 * 1024 * 1024.0)
+                SyncNodePreferences.updateLastSeen(context)
+                connectionMonitor?.checkNow()
+                Toast.makeText(
+                    context,
+                    "Connected! Free disk: ${String.format("%.1f", freeGb)} GB, Quota: ${String.format("%.1f", quotaGb)} GB",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                connectionMonitor?.checkNow()
+                val err = res.exceptionOrNull()?.localizedMessage ?: "Connection failed"
+                Toast.makeText(context, "Node unreachable: $err", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun formatEta(etaSec: Long): String {
+        if (etaSec <= 0) return "Estimating..."
+        val mins = etaSec / 60
+        val secs = etaSec % 60
+        return when {
+            mins >= 60 -> "${mins / 60}h ${mins % 60}m remaining"
+            mins > 0 -> "${mins}m remaining"
+            else -> "${secs}s remaining"
+        }
     }
 
     override fun onDestroyView() {

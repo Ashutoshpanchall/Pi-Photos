@@ -27,15 +27,19 @@
             android:textStyle="bold" />
 
         <LinearLayout
+            android:id="@+id/layoutConnectionChip"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
+            android:background="?attr/selectableItemBackground"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:paddingVertical="2dp">
 
             <View
-                android:layout_width="6dp"
-                android:layout_height="6dp"
+                android:id="@+id/dotConnectionStatus"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
                 android:layout_marginEnd="6dp"
                 android:background="@drawable/bg_cloud_icon"
                 app:backgroundTint="@color/primary_blue" />
