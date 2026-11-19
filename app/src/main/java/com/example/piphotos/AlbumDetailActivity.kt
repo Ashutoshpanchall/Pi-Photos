@@ -148,6 +148,7 @@ class AlbumDetailActivity : AppCompatActivity() {
 
     private fun setupLiveObservers() {
         val index = LocalMediaIndex.getInstance(this)
+        val syncRepo = com.example.piphotos.sync.SyncRepository.getInstance(this)
 
         // Live favorite overlay updates
         lifecycleScope.launch {
@@ -158,6 +159,13 @@ class AlbumDetailActivity : AppCompatActivity() {
                     val favItems = all.filter { favIds.contains(it.id) }
                     displayItems(favItems)
                 }
+            }
+        }
+
+        // Live backed-up badge updates
+        lifecycleScope.launch {
+            syncRepo.backedUpMediaIds.collectLatest { doneIds ->
+                binding.timelineView.updateBackedUp(doneIds)
             }
         }
 

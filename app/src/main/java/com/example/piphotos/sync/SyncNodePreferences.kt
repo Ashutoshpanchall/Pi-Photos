@@ -102,6 +102,20 @@ object SyncNodePreferences {
         getPrefs(context).edit().clear().apply()
     }
 
+    fun clear(context: Context) = clearPairedNode(context)
+
+    fun isConfigured(context: Context): Boolean = isPaired(context)
+
+    fun getServerUrl(context: Context): String? = getPairedNode(context)?.endpointUrl
+
+    fun getNodeName(context: Context): String? = getPairedNode(context)?.nodeName
+
+    fun getTlsFingerprint(context: Context): String? = getPairedNode(context)?.tlsFingerprint
+
+    fun getAuthToken(context: Context): String? = getPairedNode(context)?.authToken
+
+    fun getDeviceId(context: Context): String? = getPairedNode(context)?.deviceId
+
     fun getLastSyncTimestamp(context: Context): Long {
         return getPrefs(context).getLong(KEY_LAST_SYNC_AT, 0L)
     }

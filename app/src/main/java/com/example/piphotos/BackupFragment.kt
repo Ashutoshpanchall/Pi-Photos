@@ -2,6 +2,7 @@ package com.example.piphotos
 
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -14,10 +15,15 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.example.piphotos.databinding.FragmentBackupBinding
+import com.example.piphotos.databinding.ItemBackupQueueBinding
+import com.example.piphotos.databinding.ItemServerFolderBinding
+import com.example.piphotos.db.AppDatabase
+import com.example.piphotos.db.SyncLedgerEntity
 import com.example.piphotos.net.PiHttpClient
+import com.example.piphotos.net.ServerFolderInfo
 import com.example.piphotos.sync.ConnectionState
 import com.example.piphotos.sync.ConnectionStateMonitor
 import com.example.piphotos.sync.DevicePairingBottomSheet
@@ -25,8 +31,11 @@ import com.example.piphotos.sync.MediaSyncWorker
 import com.example.piphotos.sync.SyncLedgerState
 import com.example.piphotos.sync.SyncNodePreferences
 import com.example.piphotos.sync.SyncRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
 class BackupFragment : Fragment() {
 
@@ -35,6 +44,18 @@ class BackupFragment : Fragment() {
 
     private var connectionMonitor: ConnectionStateMonitor? = null
     private var lastObservedConnectionState: ConnectionState = ConnectionState.NotConfigured
+
+    private val queueAdapter = QueueAdapter(
+        onRetryItem = { item ->
+            val ctx = context ?: return@QueueAdapter
+            val syncRepo = SyncRepository.getInstance(ctx)
+            syncRepo.retryFailed(item.mediaId)
+            MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
+            Toast.makeText(ctx, "Retrying media_${item.mediaId}...", Toast.LENGTH_SHORT).show()
+        }
+    )
+
+    private val folderAdapter = ServerFolderAdapter()
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -50,6 +71,19 @@ class BackupFragment : Fragment() {
 
         val context = requireContext()
         connectionMonitor = ConnectionStateMonitor(context)
+
+        // Activity log button
+        binding.btnActivityLog.setOnClickListener {
+            startActivity(Intent(requireContext(), BackupActivityLogActivity::class.java))
+        }
+
+        // Setup Queue RecyclerView
+        binding.rvBackupQueue.layoutManager = LinearLayoutManager(context)
+        binding.rvBackupQueue.adapter = queueAdapter
+
+        // Setup Server Folders RecyclerView
+        binding.rvFoldersOnServer.layoutManager = LinearLayoutManager(context)
+        binding.rvFoldersOnServer.adapter = folderAdapter
 
         // Observe persistent connection state
         viewLifecycleOwner.lifecycleScope.launch {
@@ -74,7 +108,6 @@ class BackupFragment : Fragment() {
         }
 
         updateBackupUiState()
-        updateMonitoredFoldersUi()
 
         binding.btnSetupPi.setOnClickListener {
             DevicePairingBottomSheet {
@@ -89,16 +122,18 @@ class BackupFragment : Fragment() {
             showPairedNodeActionDialog()
         }
 
-        binding.iconCloudUpload.setOnClickListener {
-            showPairedNodeActionDialog()
+        binding.btnRetryAllFailed.setOnClickListener {
+            val ctx = requireContext()
+            SyncRepository.getInstance(ctx).retryAllFailed()
+            MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
+            Toast.makeText(ctx, "Retrying all failed files...", Toast.LENGTH_SHORT).show()
         }
 
-        binding.btnRetry.setOnClickListener {
+        binding.btnErrorAction.setOnClickListener {
             val ctx = requireContext()
             if (SyncNodePreferences.isPaired(ctx)) {
                 SyncRepository.getInstance(ctx).retryAllFailed()
                 MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
-                binding.layoutAttentionRequired.visibility = View.GONE
                 Toast.makeText(ctx, "Retrying media sync...", Toast.LENGTH_SHORT).show()
             } else {
                 DevicePairingBottomSheet {
@@ -112,7 +147,7 @@ class BackupFragment : Fragment() {
 
         binding.btnManageFolders.setOnClickListener {
             ManageFoldersBottomSheet {
-                updateMonitoredFoldersUi()
+                refreshServerFolders()
                 MediaSyncWorker.enqueueImmediateSync(requireContext())
                 Toast.makeText(requireContext(), "Monitored folder backup updated", Toast.LENGTH_SHORT).show()
             }.show(childFragmentManager, ManageFoldersBottomSheet.TAG)
@@ -150,12 +185,14 @@ class BackupFragment : Fragment() {
         }
 
         observeSyncRepository()
+        refreshServerFolders()
     }
 
     override fun onResume() {
         super.onResume()
         updateBackupUiState()
-        updateMonitoredFoldersUi()
+        refreshServerFolders()
+        refreshQueue()
         connectionMonitor?.start(viewLifecycleOwner.lifecycleScope)
     }
 
@@ -179,20 +216,8 @@ class BackupFragment : Fragment() {
                 binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
                     ContextCompat.getColor(context, R.color.status_green)
                 )
-                val nodeName = paired?.nodeName ?: "Home Vault"
+                val nodeName = paired?.nodeName ?: "Storage Node"
                 binding.tvBackupSubtitle.text = "Connected to $nodeName"
-
-                val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
-                if (lastSync > 0L) {
-                    val formatted = DateUtils.getRelativeTimeSpanString(
-                        lastSync,
-                        System.currentTimeMillis(),
-                        DateUtils.MINUTE_IN_MILLIS
-                    )
-                    binding.tvBackupProgressSubtitle.text = "Last synced $formatted"
-                } else {
-                    binding.tvBackupProgressSubtitle.text = "Connected · Ready to sync"
-                }
             }
             is ConnectionState.ReachableAuthNeeded -> {
                 binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
@@ -200,7 +225,6 @@ class BackupFragment : Fragment() {
                 )
                 val nodeName = paired?.nodeName ?: "Storage Node"
                 binding.tvBackupSubtitle.text = "$nodeName · Sign-in needed"
-                binding.tvBackupProgressSubtitle.text = "Authentication required (tap to re-pair)"
             }
             is ConnectionState.Unreachable -> {
                 binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
@@ -217,118 +241,175 @@ class BackupFragment : Fragment() {
                     "offline"
                 }
                 binding.tvBackupSubtitle.text = "$nodeName · Offline ($lastSeenText)"
-                binding.tvBackupProgressSubtitle.text = "Unreachable · Ensure phone & Pi on same Wi-Fi"
             }
         }
     }
 
-    private fun updateMonitoredFoldersUi() {
-        val context = context ?: return
-        val cameraActive = BackupPreferences.isCameraFolderEnabled(context)
-        val screenshotsActive = BackupPreferences.isScreenshotsFolderEnabled(context)
-
-        binding.tvStatusCamera.text = if (cameraActive) "Active" else "Paused"
-        binding.tvStatusCamera.setTextColor(
-            ContextCompat.getColor(context, if (cameraActive) R.color.text_secondary else R.color.text_tertiary)
-        )
-        binding.dotStatusCamera.backgroundTintList = ColorStateList.valueOf(
-            ContextCompat.getColor(context, if (cameraActive) R.color.primary_blue else R.color.text_tertiary)
-        )
-
-        binding.tvStatusScreenshots.text = if (screenshotsActive) "Active" else "Paused"
-        binding.tvStatusScreenshots.setTextColor(
-            ContextCompat.getColor(context, if (screenshotsActive) R.color.text_secondary else R.color.text_tertiary)
-        )
-        binding.dotStatusScreenshots.backgroundTintList = ColorStateList.valueOf(
-            ContextCompat.getColor(context, if (screenshotsActive) R.color.primary_blue else R.color.text_tertiary)
-        )
-    }
-
     private fun updateBackupUiState() {
         val context = context ?: return
-        val pairedNode = SyncNodePreferences.getPairedNode(context)
-        val isPaired = pairedNode != null
+        val isPaired = SyncNodePreferences.isPaired(context)
 
         binding.cardLocalOnly.visibility = if (isPaired) View.GONE else View.VISIBLE
         binding.cardPiOptIn.visibility = if (isPaired) View.GONE else View.VISIBLE
         binding.cardBackupProgress.visibility = if (isPaired) View.VISIBLE else View.GONE
+        binding.headerServerFolders.visibility = if (isPaired) View.VISIBLE else View.GONE
+        binding.rvFoldersOnServer.visibility = if (isPaired) View.VISIBLE else View.GONE
 
-        if (isPaired) {
-            binding.tvBackupProgressTitle.text = pairedNode!!.nodeName
-            renderConnectionState(lastObservedConnectionState)
-        } else {
+        if (!isPaired) {
+            binding.cardErrorBanner.visibility = View.GONE
+            binding.headerBackupQueue.visibility = View.GONE
+            binding.rvBackupQueue.visibility = View.GONE
             renderConnectionState(ConnectionState.NotConfigured)
-            binding.layoutAttentionRequired.visibility = View.GONE
+        } else {
+            renderConnectionState(lastObservedConnectionState)
         }
     }
 
     private fun observeSyncRepository() {
         val context = context ?: return
-        val syncRepo = com.example.piphotos.sync.SyncRepository.getInstance(context)
+        val syncRepo = SyncRepository.getInstance(context)
 
         viewLifecycleOwner.lifecycleScope.launch {
             syncRepo.syncState.collectLatest { state ->
                 renderSyncState(state)
+                refreshQueue()
             }
         }
     }
 
-    private fun renderSyncState(state: com.example.piphotos.sync.SyncLedgerState) {
+    private fun renderSyncState(state: SyncLedgerState) {
         val context = context ?: return
         if (!SyncNodePreferences.isPaired(context)) return
 
-        // Freeze upload condition switches during active upload
+        // Freeze upload condition switches during active sync
         binding.switchWifi.isEnabled = !state.isSyncing
         binding.switchCharging.isEnabled = !state.isSyncing
         binding.switchVideos.isEnabled = !state.isSyncing
 
+        // Update progress ring
+        binding.cpiBackupProgress.progress = state.percentComplete
+
+        // Byte count & last backup time
+        val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
+        val lastSyncText = if (lastSync > 0L) {
+            "Last backup: " + DateUtils.getRelativeTimeSpanString(lastSync, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
+        } else {
+            "Last backup: Never"
+        }
+        binding.tvLastBackupTime.text = lastSyncText
+
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            val db = AppDatabase.getInstance(context)
+            val summary = db.syncLedgerDao().summary
+            withContext(Dispatchers.Main) {
+                if (_binding == null) return@withContext
+                if (summary != null) {
+                    val uploadedStr = formatBytes(summary.uploadedBytes)
+                    val pendingBytes = (summary.totalBytes - summary.uploadedBytes).coerceAtLeast(0L)
+                    val pendingStr = formatBytes(pendingBytes)
+                    binding.tvBackupBytes.text = "$uploadedStr backed up · $pendingStr pending"
+                }
+            }
+        }
+
         if (state.isSyncing) {
-            binding.cardBackupProgress.visibility = View.VISIBLE
-            binding.pbBackupProgress.visibility = View.VISIBLE
+            binding.tvBackupProgressTitle.text = "Backing Up Photos..."
             binding.layoutBackupMetrics.visibility = View.VISIBLE
-            binding.layoutAttentionRequired.visibility = View.GONE
+            binding.cardErrorBanner.visibility = View.GONE
 
             if (state.totalCount > 0) {
-                binding.pbBackupProgress.isIndeterminate = false
-                binding.pbBackupProgress.max = state.totalCount
-                binding.pbBackupProgress.progress = state.doneCount + state.uploadingCount
+                binding.cpiBackupProgress.isIndeterminate = false
                 val currentFileSnippet = if (!state.currentFileName.isNullOrEmpty()) " • ${state.currentFileName}" else ""
                 binding.tvBackupProgressSubtitle.text =
-                    "Backing up: ${state.doneCount} of ${state.totalCount} (${state.percentComplete}%)$currentFileSnippet"
+                    "${state.doneCount} of ${state.totalCount} backed up (${state.percentComplete}%)$currentFileSnippet"
             } else {
-                binding.pbBackupProgress.isIndeterminate = true
+                binding.cpiBackupProgress.isIndeterminate = true
                 binding.tvBackupProgressSubtitle.text = "Scanning & hashing new media..."
             }
 
             if (state.speedBytesPerSec > 0) {
                 val speedMb = state.speedBytesPerSec / (1024.0 * 1024.0)
-                binding.tvBackupSpeed.text = String.format("%.1f MB/s", speedMb)
+                binding.tvBackupSpeed.text = String.format(Locale.US, "%.1f MB/s", speedMb)
             } else {
                 binding.tvBackupSpeed.text = "Hashing..."
             }
 
             binding.tvBackupEta.text = formatEta(state.etaSeconds)
         } else {
-            binding.pbBackupProgress.visibility = View.GONE
+            binding.cpiBackupProgress.isIndeterminate = false
             binding.layoutBackupMetrics.visibility = View.GONE
 
             if (!state.lastError.isNullOrEmpty() && state.failedCount > 0) {
-                binding.tvErrorReason.text = "${state.lastError} (${state.failedCount} file(s) failed)"
-                binding.layoutAttentionRequired.visibility = View.VISIBLE
-                binding.tvBackupProgressSubtitle.text = "Backup paused · Attention required"
-            } else {
-                binding.layoutAttentionRequired.visibility = View.GONE
-                val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
-                val relativeTime = if (lastSync > 0L) {
-                    DateUtils.getRelativeTimeSpanString(lastSync, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
-                } else "Ready"
+                binding.tvBackupProgressTitle.text = "Backup Paused"
+                binding.tvBackupProgressSubtitle.text = "${state.failedCount} file(s) failed to back up"
 
+                // Show readable error banner with clear action
+                binding.cardErrorBanner.visibility = View.VISIBLE
+                binding.tvErrorBannerTitle.text = "Attention Required"
+                binding.tvErrorBannerMessage.text = state.lastError
+                binding.btnErrorAction.text = "Retry Now"
+            } else {
+                binding.cardErrorBanner.visibility = View.GONE
                 if (state.isAllBackedUp) {
-                    binding.tvBackupProgressSubtitle.text = "All ${state.totalCount} items backed up · $relativeTime"
+                    binding.tvBackupProgressTitle.text = "All Photos Backed Up"
+                    binding.tvBackupProgressSubtitle.text = "All ${state.totalCount} items synced with node"
                 } else if (state.doneCount > 0) {
-                    binding.tvBackupProgressSubtitle.text = "${state.doneCount} of ${state.totalCount} backed up · $relativeTime"
+                    binding.tvBackupProgressTitle.text = "Ready to Back Up"
+                    binding.tvBackupProgressSubtitle.text = "${state.doneCount} of ${state.totalCount} backed up"
                 } else {
+                    binding.tvBackupProgressTitle.text = "Ready to Back Up"
                     binding.tvBackupProgressSubtitle.text = "Connected · Ready to sync"
+                }
+            }
+        }
+    }
+
+    private fun refreshQueue() {
+        val context = context ?: return
+        if (!SyncNodePreferences.isPaired(context)) {
+            binding.headerBackupQueue.visibility = View.GONE
+            binding.rvBackupQueue.visibility = View.GONE
+            return
+        }
+
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            val syncRepo = SyncRepository.getInstance(context)
+            val queueItems = syncRepo.getQueueItems(30)
+            val hasFailed = queueItems.any { it.status == "FAILED" }
+
+            withContext(Dispatchers.Main) {
+                if (_binding == null) return@withContext
+                if (queueItems.isEmpty()) {
+                    binding.headerBackupQueue.visibility = View.GONE
+                    binding.rvBackupQueue.visibility = View.GONE
+                } else {
+                    binding.headerBackupQueue.visibility = View.VISIBLE
+                    binding.rvBackupQueue.visibility = View.VISIBLE
+                    binding.btnRetryAllFailed.visibility = if (hasFailed) View.VISIBLE else View.GONE
+                    queueAdapter.submitList(queueItems)
+                }
+            }
+        }
+    }
+
+    private fun refreshServerFolders() {
+        val context = context ?: return
+        if (!SyncNodePreferences.isPaired(context)) return
+
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            val syncRepo = SyncRepository.getInstance(context)
+            val result = syncRepo.fetchDeviceFolders()
+            withContext(Dispatchers.Main) {
+                if (_binding == null) return@withContext
+                result.onSuccess { folders ->
+                    folderAdapter.submitList(folders)
+                }.onFailure {
+                    // If node offline or error, show monitored local folder defaults
+                    val defaults = listOf(
+                        ServerFolderInfo("Camera", 0, 0L),
+                        ServerFolderInfo("Screenshots", 0, 0L)
+                    )
+                    folderAdapter.submitList(defaults)
                 }
             }
         }
@@ -341,9 +422,9 @@ class BackupFragment : Fragment() {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val isWifi = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
 
-        val isLocalIp = pairedNode.endpointUrl.contains("192.168.") || 
-            pairedNode.endpointUrl.contains("://10.") || 
-            pairedNode.endpointUrl.contains(".local") || 
+        val isLocalIp = pairedNode.endpointUrl.contains("192.168.") ||
+            pairedNode.endpointUrl.contains("://10.") ||
+            pairedNode.endpointUrl.contains(".local") ||
             pairedNode.endpointUrl.contains("://127.") ||
             pairedNode.endpointUrl.contains("localhost")
 
@@ -399,7 +480,7 @@ class BackupFragment : Fragment() {
                 connectionMonitor?.checkNow()
                 Toast.makeText(
                     context,
-                    "Connected! Free disk: ${String.format("%.1f", freeGb)} GB, Quota: ${String.format("%.1f", quotaGb)} GB",
+                    "Connected! Free disk: ${String.format(Locale.US, "%.1f", freeGb)} GB, Quota: ${String.format(Locale.US, "%.1f", quotaGb)} GB",
                     Toast.LENGTH_LONG
                 ).show()
             } else {
@@ -421,6 +502,122 @@ class BackupFragment : Fragment() {
         }
     }
 
+    private class QueueAdapter(
+        private val onRetryItem: (SyncLedgerEntity) -> Unit
+    ) : RecyclerView.Adapter<QueueViewHolder>() {
+        private var items: List<SyncLedgerEntity> = emptyList()
+
+        fun submitList(newItems: List<SyncLedgerEntity>) {
+            items = newItems
+            notifyDataSetChanged()
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): QueueViewHolder {
+            val binding = ItemBackupQueueBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+            return QueueViewHolder(binding, onRetryItem)
+        }
+
+        override fun onBindViewHolder(holder: QueueViewHolder, position: Int) {
+            holder.bind(items[position])
+        }
+
+        override fun getItemCount(): Int = items.size
+    }
+
+    private class QueueViewHolder(
+        private val binding: ItemBackupQueueBinding,
+        private val onRetryItem: (SyncLedgerEntity) -> Unit
+    ) : RecyclerView.ViewHolder(binding.root) {
+
+        fun bind(item: SyncLedgerEntity) {
+            val context = binding.root.context
+            binding.tvQueueFileName.text = "media_${item.mediaId}"
+            val formattedSize = formatBytes(item.size)
+
+            when (item.status) {
+                "UPLOADING" -> {
+                    binding.tvQueueDetails.text = "$formattedSize · Streaming..."
+                    binding.tvQueueStatusBadge.text = "UPLOADING"
+                    binding.tvQueueStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.primary_blue))
+                    binding.btnQueueRetry.visibility = View.GONE
+                }
+                "HASHING" -> {
+                    binding.tvQueueDetails.text = "$formattedSize · Calculating SHA-256"
+                    binding.tvQueueStatusBadge.text = "HASHING"
+                    binding.tvQueueStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.status_amber))
+                    binding.btnQueueRetry.visibility = View.GONE
+                }
+                "FAILED" -> {
+                    val err = item.lastError ?: "Upload error"
+                    binding.tvQueueDetails.text = "$formattedSize · $err"
+                    binding.tvQueueStatusBadge.text = "FAILED"
+                    binding.tvQueueStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.status_red))
+                    binding.btnQueueRetry.visibility = View.VISIBLE
+                    binding.btnQueueRetry.setOnClickListener { onRetryItem(item) }
+                }
+                else -> {
+                    binding.tvQueueDetails.text = "$formattedSize · Waiting in queue"
+                    binding.tvQueueStatusBadge.text = "PENDING"
+                    binding.tvQueueStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
+                    binding.btnQueueRetry.visibility = View.GONE
+                }
+            }
+        }
+    }
+
+    private class ServerFolderAdapter : RecyclerView.Adapter<ServerFolderViewHolder>() {
+        private var items: List<ServerFolderInfo> = emptyList()
+
+        fun submitList(newItems: List<ServerFolderInfo>) {
+            items = newItems
+            notifyDataSetChanged()
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ServerFolderViewHolder {
+            val binding = ItemServerFolderBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+            return ServerFolderViewHolder(binding)
+        }
+
+        override fun onBindViewHolder(holder: ServerFolderViewHolder, position: Int) {
+            holder.bind(items[position])
+        }
+
+        override fun getItemCount(): Int = items.size
+    }
+
+    private class ServerFolderViewHolder(
+        private val binding: ItemServerFolderBinding
+    ) : RecyclerView.ViewHolder(binding.root) {
+
+        fun bind(folder: ServerFolderInfo) {
+            val context = binding.root.context
+            binding.tvServerFolderName.text = folder.name
+            val bytesStr = formatBytes(folder.totalBytes)
+            binding.tvServerFolderMetrics.text = "${folder.itemCount} items · $bytesStr on node"
+
+            val iconRes = when {
+                folder.name.contains("Camera", ignoreCase = true) -> R.drawable.ic_camera
+                folder.name.contains("Screenshot", ignoreCase = true) -> R.drawable.ic_phone
+                else -> R.drawable.ic_nav_photos
+            }
+            binding.ivServerFolderIcon.setImageResource(iconRes)
+
+            val isMonitored = when {
+                folder.name.equals("Camera", ignoreCase = true) -> BackupPreferences.isCameraFolderEnabled(context)
+                folder.name.equals("Screenshots", ignoreCase = true) -> BackupPreferences.isScreenshotsFolderEnabled(context)
+                else -> true
+            }
+
+            binding.tvFolderStatus.text = if (isMonitored) "Monitored" else "Paused"
+            binding.tvFolderStatus.setTextColor(
+                ContextCompat.getColor(context, if (isMonitored) R.color.text_secondary else R.color.text_tertiary)
+            )
+            binding.dotFolderStatus.backgroundTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(context, if (isMonitored) R.color.primary_blue else R.color.text_tertiary)
+            )
+        }
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
@@ -428,5 +625,17 @@ class BackupFragment : Fragment() {
 
     companion object {
         fun newInstance() = BackupFragment()
+
+        fun formatBytes(bytes: Long): String {
+            if (bytes <= 0) return "0 B"
+            val units = arrayOf("B", "KB", "MB", "GB", "TB")
+            var size = bytes.toDouble()
+            var unitIndex = 0
+            while (size >= 1024 && unitIndex < units.size - 1) {
+                size /= 1024
+                unitIndex++
+            }
+            return String.format(Locale.US, "%.1f %s", size, units[unitIndex])
+        }
     }
 }

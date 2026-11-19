@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -35,9 +36,24 @@ data class PairResult(
 data class ServerStatus(
     val diskTotal: Long,
     val diskFree: Long,
+    val diskReserved: Long = 0L,
+    val diskUsed: Long = 0L,
     val userQuota: Long,
     val userUsed: Long,
-    val userFree: Long
+    val userFree: Long,
+    val userFileCount: Int = 0
+)
+
+data class ServerFolderInfo(
+    val name: String,
+    val itemCount: Int,
+    val totalBytes: Long
+)
+
+data class DeviceFoldersResponse(
+    val deviceId: String,
+    val deviceName: String,
+    val folders: List<ServerFolderInfo>
 )
 
 class PiHttpClient(
@@ -206,14 +222,77 @@ class PiHttpClient(
                 val json = JSONObject(bodyStr)
                 val disk = json.getJSONObject("disk")
                 val user = json.getJSONObject("user")
+
+                val total = disk.optLong("total_bytes", disk.optLong("total", 0L))
+                val free = disk.optLong("free_bytes", disk.optLong("free", 0L))
+                val reserved = disk.optLong("reserved_bytes", disk.optLong("reserved", 0L))
+                val used = disk.optLong("used_bytes", (total - free).coerceAtLeast(0L))
+
+                val quota = user.optLong("quota_bytes", user.optLong("quota", 0L))
+                val uUsed = user.optLong("used_bytes", user.optLong("used", 0L))
+                val uFree = user.optLong("free_bytes", user.optLong("free", 0L))
+                val uCount = user.optInt("file_count", 0)
+
                 val status = ServerStatus(
-                    diskTotal = disk.getLong("total"),
-                    diskFree = disk.getLong("free"),
-                    userQuota = user.getLong("quota"),
-                    userUsed = user.getLong("used"),
-                    userFree = user.getLong("free")
+                    diskTotal = total,
+                    diskFree = free,
+                    diskReserved = reserved,
+                    diskUsed = used,
+                    userQuota = quota,
+                    userUsed = uUsed,
+                    userFree = uFree,
+                    userFileCount = uCount
                 )
                 Result.success(status)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getDeviceFolders(
+        endpointUrl: String,
+        authToken: String,
+        deviceId: String,
+        expectedFingerprint: String? = null
+    ): Result<DeviceFoldersResponse> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint, connectTimeoutSec = 5, readTimeoutSec = 10)
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/devices/$deviceId/folders")
+                .header("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(
+                        HttpException(resp.code, "Get folders failed: HTTP ${resp.code}")
+                    )
+                }
+                val json = JSONObject(bodyStr)
+                val devId = json.optString("device_id", deviceId)
+                val devName = json.optString("device_name", "")
+                val foldersArray = json.optJSONArray("folders") ?: JSONArray()
+                val foldersList = mutableListOf<ServerFolderInfo>()
+                for (i in 0 until foldersArray.length()) {
+                    val obj = foldersArray.getJSONObject(i)
+                    foldersList.add(
+                        ServerFolderInfo(
+                            name = obj.getString("name"),
+                            itemCount = obj.getInt("item_count"),
+                            totalBytes = obj.getLong("total_bytes")
+                        )
+                    )
+                }
+                Result.success(
+                    DeviceFoldersResponse(
+                        deviceId = devId,
+                        deviceName = devName,
+                        folders = foldersList
+                    )
+                )
             }
         } catch (e: Exception) {
             Result.failure(e)

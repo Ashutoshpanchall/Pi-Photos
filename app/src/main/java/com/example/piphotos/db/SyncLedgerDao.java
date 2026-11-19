@@ -30,6 +30,15 @@ public interface SyncLedgerDao {
     @Query("SELECT * FROM sync_ledger ORDER BY media_id ASC")
     List<SyncLedgerEntity> getAllItems();
 
+    @Query("SELECT media_id FROM sync_ledger WHERE status = 'DONE'")
+    List<Long> getDoneMediaIds();
+
+    @Query("SELECT * FROM sync_ledger WHERE status IN ('UPLOADING', 'HASHING', 'PENDING', 'FAILED') ORDER BY CASE status WHEN 'UPLOADING' THEN 1 WHEN 'HASHING' THEN 2 WHEN 'FAILED' THEN 3 ELSE 4 END, media_id DESC LIMIT :limit")
+    List<SyncLedgerEntity> getQueueItems(int limit);
+
+    @Query("SELECT * FROM sync_ledger WHERE status IN ('DONE', 'FAILED') ORDER BY CASE WHEN uploaded_at > 0 THEN uploaded_at ELSE media_id END DESC LIMIT :limit")
+    List<SyncLedgerEntity> getRecentActivity(int limit);
+
     @Query("UPDATE sync_ledger SET status = :status, last_error = :lastError WHERE media_id = :mediaId")
     void updateStatus(long mediaId, String status, String lastError);
 

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingVertical="12dp"
+    android:paddingHorizontal="16dp"
+    android:background="@drawable/bg_card_white"
+    android:layout_marginBottom="6dp">
+
+    <FrameLayout
+        android:id="@+id/iconLogStatusContainer"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:layout_alignParentStart="true"
+        android:layout_centerVertical="true"
+        android:background="@drawable/bg_cloud_icon">
+
+        <ImageView
+            android:id="@+id/ivLogStatusIcon"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_check"
+            app:tint="@color/status_green" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_toEndOf="@id/iconLogStatusContainer"
+        android:layout_toStartOf="@id/tvLogBadge"
+        android:layout_marginStart="14dp"
+        android:layout_marginEnd="10dp"
+        android:layout_centerVertical="true"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvLogFileName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="media_upload.jpg"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:singleLine="true"
+            android:ellipsize="middle" />
+
+        <TextView
+            android:id="@+id/tvLogDetails"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="2.4 MB · Today at 3:15 PM"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/tvLogHashOrError"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="SHA-256: 7a3f8b..."
+            android:textColor="@color/text_tertiary"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:singleLine="true"
+            android:ellipsize="end" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvLogBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentEnd="true"
+        android:layout_centerVertical="true"
+        android:text="SYNCED"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:textColor="@color/status_green"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="3dp"
+        android:background="@drawable/bg_pill" />
+
+</RelativeLayout>

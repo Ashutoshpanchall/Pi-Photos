@@ -392,6 +392,10 @@ class TimelineView @JvmOverloads constructor(
         adapter.updateFavorites(favoriteIds)
     }
 
+    fun updateBackedUp(backedUpIds: Set<Long>) {
+        adapter.updateBackedUp(backedUpIds)
+    }
+
     fun scrollToTop() {
         gridLayoutManager.scrollToPositionWithOffset(0, 0)
     }

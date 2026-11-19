@@ -79,6 +79,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".BackupActivityLogActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".NetworkPreferencesActivity"
             android:exported="false" />
 

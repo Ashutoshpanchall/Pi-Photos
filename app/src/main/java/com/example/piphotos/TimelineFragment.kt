@@ -300,11 +300,17 @@ class TimelineFragment : Fragment() {
 
     private fun observeMediaIndex() {
         val index = LocalMediaIndex.getInstance(requireContext())
+        val syncRepo = com.example.piphotos.sync.SyncRepository.getInstance(requireContext())
         viewLifecycleOwner.lifecycleScope.launch {
             index.favoritesRepo.observeIds().collectLatest { favIds ->
                 cachedFavoriteIds = favIds
                 _binding?.timelineView?.updateFavorites(favIds)
                 updateUiWithCurrentState()
+            }
+        }
+        viewLifecycleOwner.lifecycleScope.launch {
+            syncRepo.backedUpMediaIds.collectLatest { doneIds ->
+                _binding?.timelineView?.updateBackedUp(doneIds)
             }
         }
         viewLifecycleOwner.lifecycleScope.launch {

@@ -10,6 +10,8 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.example.piphotos.databinding.FragmentProfileBinding
 import com.example.piphotos.databinding.ItemNodeUserBinding
 import com.example.piphotos.sync.DevicePairingBottomSheet
@@ -88,18 +90,23 @@ class ProfileFragment : Fragment() {
 
     private fun bindDeviceStorage() {
         _binding?.let { b ->
-            val users = NodeRepository.getUsers()
-            if (users.isNotEmpty()) {
-                val adminUser = users.first()
-                val usedFormatted = String.format("%.1f", adminUser.usedGB)
-                val quotaFormatted = String.format("%.0f", adminUser.quotaGB)
-                val remaining = adminUser.quotaGB - adminUser.usedGB
-                val remainingFormatted = String.format("%.1f", if (remaining > 0) remaining else 0.0)
-                val percent = if (adminUser.quotaGB > 0) ((adminUser.usedGB / adminUser.quotaGB) * 100).toInt() else 0
+            val context = context ?: return
+            val isPaired = SyncNodePreferences.isPaired(context)
+            if (isPaired) {
+                val syncRepo = com.example.piphotos.sync.SyncRepository.getInstance(context)
+                viewLifecycleOwner.lifecycleScope.launch {
+                    val res = syncRepo.fetchServerStatus()
+                    res.onSuccess { status ->
+                        val usedGb = status.userUsed / (1024.0 * 1024.0 * 1024.0)
+                        val quotaGb = status.userQuota / (1024.0 * 1024.0 * 1024.0)
+                        val freeGb = status.userFree / (1024.0 * 1024.0 * 1024.0)
+                        val pct = if (status.userQuota > 0) ((status.userUsed.toDouble() / status.userQuota.toDouble()) * 100).toInt() else 0
 
-                b.tvQuotaUsed.text = "$usedFormatted GB of $quotaFormatted GB used"
-                b.tvQuotaFree.text = "$remainingFormatted GB free"
-                b.pbPersonalQuota.progress = percent
+                        b.tvQuotaUsed.text = String.format(java.util.Locale.US, "%.1f GB of %.0f GB used", usedGb, quotaGb)
+                        b.tvQuotaFree.text = String.format(java.util.Locale.US, "%.1f GB free", freeGb)
+                        b.pbPersonalQuota.progress = pct
+                    }
+                }
             } else {
                 try {
                     val stat = android.os.StatFs(android.os.Environment.getDataDirectory().path)
@@ -112,8 +119,8 @@ class ProfileFragment : Fragment() {
                     val usedGB = maxOf(0.0, totalGB - freeGB)
                     val percent = if (totalGB > 0) ((usedGB / totalGB) * 100).toInt() else 0
 
-                    b.tvQuotaUsed.text = "${String.format("%.1f", usedGB)} GB of ${String.format("%.0f", totalGB)} GB used"
-                    b.tvQuotaFree.text = "${String.format("%.1f", freeGB)} GB free"
+                    b.tvQuotaUsed.text = "${String.format(java.util.Locale.US, "%.1f", usedGB)} GB of ${String.format(java.util.Locale.US, "%.0f", totalGB)} GB used"
+                    b.tvQuotaFree.text = "${String.format(java.util.Locale.US, "%.1f", freeGB)} GB free"
                     b.pbPersonalQuota.progress = percent
                 } catch (_: Exception) {
                     b.tvQuotaUsed.text = "Internal Storage"
@@ -142,13 +149,15 @@ class ProfileFragment : Fragment() {
 
         b.cardProfilePiOptIn.visibility = View.GONE
         b.cardPersonalQuota.visibility = View.VISIBLE
-        b.layoutNodePill.visibility = View.VISIBLE
+        b.rowPipeline.visibility = View.VISIBLE
+
+        val pairedNode = SyncNodePreferences.getPairedNode(context)
+        val nodeName = pairedNode?.nodeName ?: NodeRepository.nodeName
+        b.layoutNodePill.visibility = if (nodeName.isNotEmpty()) View.VISIBLE else View.GONE
 
         val users = NodeRepository.getUsers()
         b.layoutPeopleSection.visibility = if (users.isNotEmpty()) View.VISIBLE else View.GONE
-        b.layoutNodePill.visibility = if (NodeRepository.nodeName.isNotEmpty()) View.VISIBLE else View.GONE
         b.rowRemoteNode.visibility = if (NodeRepository.remoteNodeDomain.isNotEmpty()) View.VISIBLE else View.GONE
-        b.rowPipeline.visibility = if (NodeRepository.nodeName.isNotEmpty()) View.VISIBLE else View.GONE
         b.btnSignOut.visibility = if (users.isNotEmpty()) View.VISIBLE else View.GONE
 
         val container = b.containerUsersList

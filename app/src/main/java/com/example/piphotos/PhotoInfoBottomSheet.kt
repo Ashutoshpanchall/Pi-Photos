@@ -9,6 +9,11 @@ import android.view.ViewGroup
 import com.example.piphotos.databinding.SheetPhotoInfoBinding
 import com.example.piphotos.media.LocalMediaIndex
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -160,6 +165,36 @@ class PhotoInfoBottomSheet : BottomSheetDialogFragment() {
         }
 
         binding.tvStorageLocation.text = relativePath ?: "Device Storage / ${item.bucketName}"
+
+        // Query backup status from local Room ledger
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            val db = com.example.piphotos.db.AppDatabase.getInstance(requireContext())
+            val ledgerItem = db.syncLedgerDao().getByMediaId(item.id)
+            withContext(Dispatchers.Main) {
+                if (_binding == null) return@withContext
+                if (ledgerItem != null && ledgerItem.status == "DONE") {
+                    val upAt = ledgerItem.uploadedAt ?: 0L
+                    val dateStr = if (upAt > 0L) {
+                        SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(upAt))
+                    } else "Recently"
+                    val hash = ledgerItem.sha256
+                    val shortHash = if (!hash.isNullOrEmpty()) {
+                        " · SHA-256: ${hash.take(8)}..."
+                    } else ""
+                    binding.tvBackupStatus.text = "Backed up to Storage Node\n$dateStr$shortHash"
+                    binding.tvBackupStatus.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary))
+                    binding.ivBackupStatusIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.status_green))
+                } else if (ledgerItem != null && ledgerItem.status == "FAILED") {
+                    binding.tvBackupStatus.text = "Backup Failed\n${ledgerItem.lastError ?: "Unknown error"}"
+                    binding.tvBackupStatus.setTextColor(ContextCompat.getColor(requireContext(), R.color.status_red))
+                    binding.ivBackupStatusIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.status_red))
+                } else {
+                    binding.tvBackupStatus.text = "Local device only · Not backed up"
+                    binding.tvBackupStatus.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary))
+                    binding.ivBackupStatusIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.text_secondary))
+                }
+            }
+        }
     }
 
     private fun formatFileSize(bytes: Long): String {

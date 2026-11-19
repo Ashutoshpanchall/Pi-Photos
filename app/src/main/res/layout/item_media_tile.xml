@@ -56,6 +56,25 @@
         android:visibility="gone"
         app:tint="@color/status_amber" />
 
+    <!-- Backed-Up Cloud Badge Overlay -->
+    <FrameLayout
+        android:id="@+id/layoutBackedUpBadge"
+        android:layout_width="18dp"
+        android:layout_height="18dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="6dp"
+        android:background="@drawable/bg_cloud_icon"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/ivBackedUpBadge"
+            android:layout_width="11dp"
+            android:layout_height="11dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_nav_backup"
+            app:tint="@color/primary_blue" />
+    </FrameLayout>
+
     <!-- Selection Checkmark Circle Overlay -->
     <FrameLayout
         android:id="@+id/layoutCheckOverlay"

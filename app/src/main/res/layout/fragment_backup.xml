@@ -18,13 +18,30 @@
         android:paddingBottom="12dp"
         app:layout_constraintTop_toTopOf="parent">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/backup_title"
-            android:textColor="@color/text_primary"
-            android:textSize="32sp"
-            android:textStyle="bold" />
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/backup_title"
+                android:textColor="@color/text_primary"
+                android:textSize="32sp"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:id="@+id/btnActivityLog"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_alignParentEnd="true"
+                android:layout_centerVertical="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Backup Activity Log"
+                android:padding="8dp"
+                android:src="@drawable/ic_clock"
+                app:tint="@color/text_primary" />
+        </RelativeLayout>
 
         <LinearLayout
             android:id="@+id/layoutConnectionChip"
@@ -55,7 +72,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Scrollable Content (Instant Tap Response) -->
+    <!-- Scrollable Content -->
     <com.example.piphotos.ResponsiveScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -182,7 +199,7 @@
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
 
-            <!-- MAIN PROGRESS CARD (Hidden in Local-Only) -->
+            <!-- MAIN PROGRESS CARD (Shown when paired) -->
             <androidx.cardview.widget.CardView
                 android:id="@+id/cardBackupProgress"
                 android:layout_width="match_parent"
@@ -204,11 +221,42 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content">
 
-                        <LinearLayout
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
+                        <!-- Progress Ring on Left -->
+                        <FrameLayout
+                            android:id="@+id/progressRingContainer"
+                            android:layout_width="60dp"
+                            android:layout_height="60dp"
                             android:layout_alignParentStart="true"
-                            android:layout_toStartOf="@id/iconCloudUpload"
+                            android:layout_centerVertical="true">
+
+                            <com.google.android.material.progressindicator.CircularProgressIndicator
+                                android:id="@+id/cpiBackupProgress"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="center"
+                                app:indicatorSize="60dp"
+                                app:trackThickness="5dp"
+                                app:trackCornerRadius="3dp"
+                                app:indicatorColor="@color/primary_blue"
+                                app:trackColor="@color/progress_track"
+                                android:max="100"
+                                android:progress="0" />
+
+                            <ImageView
+                                android:id="@+id/ivProgressCenterIcon"
+                                android:layout_width="22dp"
+                                android:layout_height="22dp"
+                                android:layout_gravity="center"
+                                android:src="@drawable/ic_nav_backup"
+                                app:tint="@color/primary_blue" />
+                        </FrameLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_toEndOf="@id/progressRingContainer"
+                            android:layout_marginStart="16dp"
+                            android:layout_centerVertical="true"
                             android:orientation="vertical">
 
                             <TextView
@@ -228,45 +276,33 @@
                                 android:text="@string/backup_progress_subtitle"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="13sp" />
+
+                            <TextView
+                                android:id="@+id/tvBackupBytes"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="0 B backed up"
+                                android:textColor="@color/text_tertiary"
+                                android:textSize="12sp" />
+
+                            <TextView
+                                android:id="@+id/tvLastBackupTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Last sync: Never"
+                                android:textColor="@color/text_tertiary"
+                                android:textSize="11sp" />
                         </LinearLayout>
-
-                        <!-- Cloud upload badge icon -->
-                        <FrameLayout
-                            android:id="@+id/iconCloudUpload"
-                            android:layout_width="38dp"
-                            android:layout_height="38dp"
-                            android:layout_alignParentEnd="true"
-                            android:layout_centerVertical="true"
-                            android:background="@drawable/bg_cloud_icon">
-
-                            <ImageView
-                                android:layout_width="20dp"
-                                android:layout_height="20dp"
-                                android:layout_gravity="center"
-                                android:src="@drawable/ic_nav_backup"
-                                app:tint="@color/primary_blue" />
-                        </FrameLayout>
                     </RelativeLayout>
-
-                    <!-- Horizontal Progress Bar -->
-                    <ProgressBar
-                        android:id="@+id/pbBackupProgress"
-                        style="?android:attr/progressBarStyleHorizontal"
-                        android:layout_width="match_parent"
-                        android:layout_height="6dp"
-                        android:layout_marginTop="16dp"
-                        android:max="100"
-                        android:progress="0"
-                        android:visibility="gone"
-                        android:progressBackgroundTint="@color/progress_track"
-                        android:progressTint="@color/primary_blue" />
 
                     <!-- Metrics row: Speed & ETA -->
                     <RelativeLayout
                         android:id="@+id/layoutBackupMetrics"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginTop="14dp"
                         android:visibility="gone">
 
                         <LinearLayout
@@ -318,11 +354,168 @@
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
 
+            <!-- READABLE ERROR BANNER WITH ONE CLEAR ACTION -->
+            <androidx.cardview.widget.CardView
+                android:id="@+id/cardErrorBanner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:visibility="gone"
+                app:cardBackgroundColor="@color/error_card_bg"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="0dp">
+
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:padding="14dp">
+
+                    <FrameLayout
+                        android:id="@+id/iconErrorContainer"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:layout_alignParentStart="true"
+                        android:layout_centerVertical="true"
+                        android:background="@drawable/bg_status_bar"
+                        app:backgroundTint="#FEE2E2">
+
+                        <ImageView
+                            android:layout_width="18dp"
+                            android:layout_height="18dp"
+                            android:layout_gravity="center"
+                            android:src="@drawable/ic_alert"
+                            app:tint="@color/status_red" />
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_toEndOf="@id/iconErrorContainer"
+                        android:layout_toStartOf="@id/btnErrorAction"
+                        android:layout_marginStart="12dp"
+                        android:layout_marginEnd="10dp"
+                        android:layout_centerVertical="true"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/tvErrorBannerTitle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Backup Interrupted"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvErrorBannerMessage"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Storage node unreachable. Check Wi-Fi connection."
+                            android:textColor="@color/error_text"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/btnErrorAction"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_alignParentEnd="true"
+                        android:layout_centerVertical="true"
+                        android:background="@drawable/bg_invite_button"
+                        android:paddingStart="14dp"
+                        android:paddingTop="7dp"
+                        android:paddingEnd="14dp"
+                        android:paddingBottom="7dp"
+                        android:text="Retry Now"
+                        android:textColor="@color/primary_blue"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </RelativeLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- SECTION: Backup Queue -->
+            <RelativeLayout
+                android:id="@+id/headerBackupQueue"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="8dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="BACKUP QUEUE"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnRetryAllFailed"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentEnd="true"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:padding="4dp"
+                    android:text="Retry All Failed"
+                    android:textColor="@color/primary_blue"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+            </RelativeLayout>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvBackupQueue"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:nestedScrollingEnabled="false"
+                android:visibility="gone" />
+
+            <!-- SECTION: Folders on Storage Node -->
+            <RelativeLayout
+                android:id="@+id/headerServerFolders"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="8dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/lblFoldersOnNode"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="FOLDERS ON STORAGE NODE"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnManageFolders"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentEnd="true"
+                    android:layout_alignBaseline="@id/lblFoldersOnNode"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:padding="4dp"
+                    android:text="@string/action_manage"
+                    android:textColor="@color/primary_blue"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </RelativeLayout>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvFoldersOnServer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:nestedScrollingEnabled="false"
+                android:visibility="gone" />
+
             <!-- SECTION: Upload Conditions -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="26dp"
+                android:layout_marginTop="24dp"
                 android:layout_marginBottom="10dp"
                 android:text="@string/section_upload_conditions"
                 android:textColor="@color/text_secondary"
@@ -468,280 +661,7 @@
                 </RelativeLayout>
             </LinearLayout>
 
-            <!-- SECTION: Monitored Folders -->
-            <RelativeLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="26dp"
-                android:layout_marginBottom="10dp">
-
-                <TextView
-                    android:id="@+id/lblMonitored"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/section_monitored_folders"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/btnManageFolders"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_alignParentEnd="true"
-                    android:layout_alignBaseline="@id/lblMonitored"
-                    android:background="?attr/selectableItemBackgroundBorderless"
-                    android:padding="6dp"
-                    android:text="@string/action_manage"
-                    android:textColor="@color/primary_blue"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-            </RelativeLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_card_white"
-                android:orientation="vertical"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp">
-
-                <!-- Folder 1: Camera -->
-                <RelativeLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="56dp">
-
-                    <FrameLayout
-                        android:id="@+id/badgeCamera"
-                        android:layout_width="34dp"
-                        android:layout_height="34dp"
-                        android:layout_centerVertical="true"
-                        android:background="@drawable/bg_status_bar">
-
-                        <ImageView
-                            android:layout_width="18dp"
-                            android:layout_height="18dp"
-                            android:layout_gravity="center"
-                            android:src="@drawable/ic_camera"
-                            app:tint="@color/text_secondary" />
-                    </FrameLayout>
-
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_centerVertical="true"
-                        android:layout_marginStart="14dp"
-                        android:layout_toEndOf="@id/badgeCamera"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/folder_camera"
-                            android:textColor="@color/text_primary"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/folder_camera_path"
-                            android:textColor="@color/text_tertiary"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_alignParentEnd="true"
-                        android:layout_centerVertical="true"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <View
-                            android:id="@+id/dotStatusCamera"
-                            android:layout_width="6dp"
-                            android:layout_height="6dp"
-                            android:layout_marginEnd="6dp"
-                            android:background="@drawable/bg_cloud_icon"
-                            app:backgroundTint="@color/primary_blue" />
-
-                        <TextView
-                            android:id="@+id/tvStatusCamera"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/status_active"
-                            android:textColor="@color/text_secondary"
-                            android:textSize="13sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-                </RelativeLayout>
-
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:background="@color/divider_subtle" />
-
-                <!-- Folder 2: Screenshots -->
-                <RelativeLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="56dp">
-
-                    <FrameLayout
-                        android:id="@+id/badgeScreenshots"
-                        android:layout_width="34dp"
-                        android:layout_height="34dp"
-                        android:layout_centerVertical="true"
-                        android:background="@drawable/bg_status_bar">
-
-                        <ImageView
-                            android:layout_width="18dp"
-                            android:layout_height="18dp"
-                            android:layout_gravity="center"
-                            android:src="@drawable/ic_phone"
-                            app:tint="@color/text_secondary" />
-                    </FrameLayout>
-
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_centerVertical="true"
-                        android:layout_marginStart="14dp"
-                        android:layout_toEndOf="@id/badgeScreenshots"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/folder_screenshots"
-                            android:textColor="@color/text_primary"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/folder_screenshots_path"
-                            android:textColor="@color/text_tertiary"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_alignParentEnd="true"
-                        android:layout_centerVertical="true"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <View
-                            android:id="@+id/dotStatusScreenshots"
-                            android:layout_width="6dp"
-                            android:layout_height="6dp"
-                            android:layout_marginEnd="6dp"
-                            android:background="@drawable/bg_cloud_icon"
-                            app:backgroundTint="@color/text_tertiary" />
-
-                        <TextView
-                            android:id="@+id/tvStatusScreenshots"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/status_paused"
-                            android:textColor="@color/text_tertiary"
-                            android:textSize="13sp" />
-                    </LinearLayout>
-                </RelativeLayout>
-            </LinearLayout>
-
-            <!-- SECTION: Attention Required (Hidden in Local-Only) -->
-            <LinearLayout
-                android:id="@+id/layoutAttentionRequired"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="26dp"
-                    android:layout_marginBottom="10dp"
-                    android:text="@string/section_attention_required"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <!-- Error Item Card -->
-                <RelativeLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/bg_card_error"
-                    android:padding="14dp">
-
-                    <FrameLayout
-                        android:id="@+id/badgeAlert"
-                        android:layout_width="40dp"
-                        android:layout_height="40dp"
-                        android:layout_centerVertical="true"
-                        android:background="@drawable/bg_video_duration"
-                        app:backgroundTint="#FEE2E2">
-
-                        <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
-                            android:layout_gravity="center"
-                            android:src="@drawable/ic_alert"
-                            app:tint="@color/status_red" />
-                    </FrameLayout>
-
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_centerVertical="true"
-                        android:layout_marginStart="14dp"
-                        android:layout_toEndOf="@id/badgeAlert"
-                        android:layout_toStartOf="@id/btnRetry"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:id="@+id/tvErrorTitle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/error_file"
-                            android:textColor="@color/text_primary"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/tvErrorReason"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:text="@string/error_reason"
-                            android:textColor="@color/error_text"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/btnRetry"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_alignParentEnd="true"
-                        android:layout_centerVertical="true"
-                        android:background="@drawable/bg_invite_button"
-                        android:paddingStart="16dp"
-                        android:paddingTop="8dp"
-                        android:paddingEnd="16dp"
-                        android:paddingBottom="8dp"
-                        android:text="@string/action_retry"
-                        android:textColor="@color/primary_blue"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
-                </RelativeLayout>
-            </LinearLayout>
-
         </LinearLayout>
     </com.example.piphotos.ResponsiveScrollView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
-

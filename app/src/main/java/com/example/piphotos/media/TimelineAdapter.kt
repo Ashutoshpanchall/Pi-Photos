@@ -35,6 +35,7 @@ class TimelineAdapter(
 
     val selectedIds: Set<Long> get() = selectionState.selectedIds
     var favoriteIds: Set<Long> = emptySet()
+    var backedUpIds: Set<Long> = emptySet()
 
     fun updateFavorites(newFavIds: Set<Long>) {
         if (favoriteIds == newFavIds) return
@@ -44,6 +45,18 @@ class TimelineAdapter(
             val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
             if (pos >= 0) {
                 notifyItemChanged(pos, PAYLOAD_FAVORITE)
+            }
+        }
+    }
+
+    fun updateBackedUp(newBackedUpIds: Set<Long>) {
+        if (backedUpIds == newBackedUpIds) return
+        val changedIds = (backedUpIds - newBackedUpIds) + (newBackedUpIds - backedUpIds)
+        backedUpIds = newBackedUpIds
+        for (id in changedIds) {
+            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
+            if (pos >= 0) {
+                notifyItemChanged(pos, PAYLOAD_BACKED_UP)
             }
         }
     }
@@ -93,7 +106,10 @@ class TimelineAdapter(
             if (payloads.contains(PAYLOAD_FAVORITE)) {
                 holder.updateFavorite(row.item.id)
             }
-            if (!payloads.contains(PAYLOAD_SELECTION) && !payloads.contains(PAYLOAD_FAVORITE)) {
+            if (payloads.contains(PAYLOAD_BACKED_UP)) {
+                holder.updateBackedUp(row.item.id)
+            }
+            if (!payloads.contains(PAYLOAD_SELECTION) && !payloads.contains(PAYLOAD_FAVORITE) && !payloads.contains(PAYLOAD_BACKED_UP)) {
                 super.onBindViewHolder(holder, position, payloads)
             }
         } else {
@@ -221,9 +237,10 @@ class TimelineAdapter(
                 binding.layoutVideoBadge.visibility = View.GONE
             }
 
-            // Selection state
+            // Selection & status state
             updateSelection(item.id)
             updateFavorite(item.id)
+            updateBackedUp(item.id)
         }
 
         fun recycle() {
@@ -234,6 +251,10 @@ class TimelineAdapter(
 
         fun updateFavorite(itemId: Long) {
             binding.ivFavoriteBadge.visibility = if (favoriteIds.contains(itemId)) View.VISIBLE else View.GONE
+        }
+
+        fun updateBackedUp(itemId: Long) {
+            binding.layoutBackedUpBadge.visibility = if (backedUpIds.contains(itemId)) View.VISIBLE else View.GONE
         }
 
         fun updateSelection(itemId: Long) {
@@ -256,6 +277,7 @@ class TimelineAdapter(
         const val VIEW_TYPE_MEDIA = 1
         const val PAYLOAD_SELECTION = "PAYLOAD_SELECTION"
         const val PAYLOAD_FAVORITE = "PAYLOAD_FAVORITE"
+        const val PAYLOAD_BACKED_UP = "PAYLOAD_BACKED_UP"
     }
 }
 

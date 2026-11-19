@@ -55,6 +55,9 @@ class SyncRepository private constructor(
     private val _syncState = MutableStateFlow(SyncLedgerState())
     val syncState: StateFlow<SyncLedgerState> = _syncState.asStateFlow()
 
+    private val _backedUpMediaIds = MutableStateFlow<Set<Long>>(emptySet())
+    val backedUpMediaIds: StateFlow<Set<Long>> = _backedUpMediaIds.asStateFlow()
+
     init {
         scope.launch {
             refreshSummary()
@@ -71,6 +74,8 @@ class SyncRepository private constructor(
     private fun refreshSummary() {
         val summary = ledgerDao.summary
         updateStateFromSummary(summary)
+        val doneIds = ledgerDao.doneMediaIds.toSet()
+        _backedUpMediaIds.value = doneIds
     }
 
     private fun updateStateFromSummary(summary: SyncLedgerSummary?) {
@@ -350,7 +355,54 @@ class SyncRepository private constructor(
     fun retryAllFailed() {
         scope.launch {
             ledgerDao.resetAllFailed()
+            refreshSummary()
         }
+    }
+
+    fun retryFailed(mediaId: Long) {
+        scope.launch {
+            ledgerDao.resetForRetry(mediaId)
+            refreshSummary()
+        }
+    }
+
+    suspend fun getQueueItems(limit: Int = 50): List<SyncLedgerEntity> = withContext(Dispatchers.IO) {
+        ledgerDao.getQueueItems(limit)
+    }
+
+    suspend fun getRecentActivity(limit: Int = 50): List<SyncLedgerEntity> = withContext(Dispatchers.IO) {
+        ledgerDao.getRecentActivity(limit)
+    }
+
+    suspend fun fetchDeviceFolders(): Result<List<com.example.piphotos.net.ServerFolderInfo>> = withContext(Dispatchers.IO) {
+        val isConfigured = SyncNodePreferences.isConfigured(context)
+        if (!isConfigured) {
+            return@withContext Result.failure(IllegalStateException("No node paired"))
+        }
+        val serverUrl = SyncNodePreferences.getServerUrl(context)
+            ?: return@withContext Result.failure(IllegalStateException("No server URL"))
+        val authToken = SyncNodePreferences.getAuthToken(context)
+            ?: return@withContext Result.failure(IllegalStateException("No auth token"))
+        val deviceId = SyncNodePreferences.getDeviceId(context)
+            ?: return@withContext Result.failure(IllegalStateException("No device ID"))
+        val fingerprint = SyncNodePreferences.getTlsFingerprint(context)
+
+        val res = httpClient.getDeviceFolders(serverUrl, authToken, deviceId, fingerprint)
+        res.map { it.folders }
+    }
+
+    suspend fun fetchServerStatus(): Result<com.example.piphotos.net.ServerStatus> = withContext(Dispatchers.IO) {
+        val isConfigured = SyncNodePreferences.isConfigured(context)
+        if (!isConfigured) {
+            return@withContext Result.failure(IllegalStateException("No node paired"))
+        }
+        val serverUrl = SyncNodePreferences.getServerUrl(context)
+            ?: return@withContext Result.failure(IllegalStateException("No server URL"))
+        val authToken = SyncNodePreferences.getAuthToken(context)
+            ?: return@withContext Result.failure(IllegalStateException("No auth token"))
+        val fingerprint = SyncNodePreferences.getTlsFingerprint(context)
+
+        httpClient.getStatus(serverUrl, authToken, fingerprint)
     }
 
     companion object {
