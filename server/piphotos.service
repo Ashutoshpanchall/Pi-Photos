@@ -1,0 +1,35 @@
+[Unit]
+Description=PiPhotos Storage Node
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=piphotos
+Group=piphotos
+WorkingDirectory=/opt/piphotos/server
+ExecStart=/opt/piphotos/server/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+# Environment
+Environment=PIPHOTOS_PORT=8443
+Environment=PIPHOTOS_NAME=Home Vault
+Environment=PIPHOTOS_STORAGE=/mnt/storage/piphotos
+Environment=PIPHOTOS_DB=/opt/piphotos/data/piphotos.db
+Environment=PIPHOTOS_CERTS=/opt/piphotos/data/certs
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/mnt/storage/piphotos /opt/piphotos/data
+PrivateTmp=true
+PrivateDevices=true
+
+# Resource limits (Pi Zero 2 W friendly)
+MemoryMax=200M
+MemoryHigh=150M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+{
+  "name": "Home Vault",
+  "port": 8443,
+  "storage": "./data/storage",
+  "database": "./data/piphotos.db",
+  "certs": "./data/certs",
+  "default_quota": 107374182400
+}

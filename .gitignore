@@ -13,3 +13,9 @@ local.properties
 graphify-out/
 .vscode/
 
+# Server runtime data
+server/data/
+server/.venv/
+__pycache__/
+*.pyc
+
