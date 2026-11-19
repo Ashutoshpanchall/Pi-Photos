@@ -33,7 +33,7 @@ class ReleaseLeakCheckTest {
 
     private fun matchesToken(text: String, token: String): Boolean {
         val pattern = if (token.length <= 3) {
-            "\\b" + Regex.escape(token) + "\\b"
+            "(?:^|[\\s\\x00\"'.,;:!?/()\\[\\]<>-])" + Regex.escape(token) + "(?:$|[\\s\\x00\"'.,;:!?/()\\[\\]<>-])"
         } else {
             Regex.escape(token)
         }

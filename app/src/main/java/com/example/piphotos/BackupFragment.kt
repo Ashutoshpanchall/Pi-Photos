@@ -22,7 +22,9 @@ import com.example.piphotos.sync.ConnectionState
 import com.example.piphotos.sync.ConnectionStateMonitor
 import com.example.piphotos.sync.DevicePairingBottomSheet
 import com.example.piphotos.sync.MediaSyncWorker
+import com.example.piphotos.sync.SyncLedgerState
 import com.example.piphotos.sync.SyncNodePreferences
+import com.example.piphotos.sync.SyncRepository
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -94,6 +96,7 @@ class BackupFragment : Fragment() {
         binding.btnRetry.setOnClickListener {
             val ctx = requireContext()
             if (SyncNodePreferences.isPaired(ctx)) {
+                SyncRepository.getInstance(ctx).retryAllFailed()
                 MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
                 binding.layoutAttentionRequired.visibility = View.GONE
                 Toast.makeText(ctx, "Retrying media sync...", Toast.LENGTH_SHORT).show()
@@ -146,7 +149,7 @@ class BackupFragment : Fragment() {
             Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
         }
 
-        observeSyncWork()
+        observeSyncRepository()
     }
 
     override fun onResume() {
@@ -259,98 +262,75 @@ class BackupFragment : Fragment() {
         }
     }
 
-    private fun observeSyncWork() {
+    private fun observeSyncRepository() {
         val context = context ?: return
-        val workManager = WorkManager.getInstance(context)
+        val syncRepo = com.example.piphotos.sync.SyncRepository.getInstance(context)
 
-        workManager.getWorkInfosForUniqueWorkLiveData(MediaSyncWorker.WORK_NAME_IMMEDIATE)
-            .observe(viewLifecycleOwner) { workInfoList ->
-                handleWorkInfoList(workInfoList)
+        viewLifecycleOwner.lifecycleScope.launch {
+            syncRepo.syncState.collectLatest { state ->
+                renderSyncState(state)
             }
-
-        workManager.getWorkInfosForUniqueWorkLiveData(MediaSyncWorker.WORK_NAME_PERIODIC)
-            .observe(viewLifecycleOwner) { workInfoList ->
-                handleWorkInfoList(workInfoList)
-            }
+        }
     }
 
-    private fun handleWorkInfoList(workInfoList: List<WorkInfo>?) {
-        val workInfo = workInfoList?.firstOrNull() ?: return
+    private fun renderSyncState(state: com.example.piphotos.sync.SyncLedgerState) {
         val context = context ?: return
         if (!SyncNodePreferences.isPaired(context)) return
 
-        val isRunning = workInfo.state == WorkInfo.State.RUNNING
-
         // Freeze upload condition switches during active upload
-        binding.switchWifi.isEnabled = !isRunning
-        binding.switchCharging.isEnabled = !isRunning
-        binding.switchVideos.isEnabled = !isRunning
+        binding.switchWifi.isEnabled = !state.isSyncing
+        binding.switchCharging.isEnabled = !state.isSyncing
+        binding.switchVideos.isEnabled = !state.isSyncing
 
-        when (workInfo.state) {
-            WorkInfo.State.RUNNING -> {
-                binding.cardBackupProgress.visibility = View.VISIBLE
-                binding.pbBackupProgress.visibility = View.VISIBLE
-                binding.layoutBackupMetrics.visibility = View.VISIBLE
-                binding.layoutAttentionRequired.visibility = View.GONE
+        if (state.isSyncing) {
+            binding.cardBackupProgress.visibility = View.VISIBLE
+            binding.pbBackupProgress.visibility = View.VISIBLE
+            binding.layoutBackupMetrics.visibility = View.VISIBLE
+            binding.layoutAttentionRequired.visibility = View.GONE
 
-                val current = workInfo.progress.getInt(MediaSyncWorker.KEY_PROGRESS_CURRENT, 0)
-                val total = workInfo.progress.getInt(MediaSyncWorker.KEY_PROGRESS_TOTAL, 0)
-                val uploaded = workInfo.progress.getInt(MediaSyncWorker.KEY_PROGRESS_UPLOADED, 0)
-                val speedBps = workInfo.progress.getLong(MediaSyncWorker.KEY_PROGRESS_SPEED_BYTES_PER_SEC, 0L)
-                val etaSec = workInfo.progress.getLong(MediaSyncWorker.KEY_PROGRESS_ETA_SECONDS, -1L)
-
-                if (total > 0) {
-                    binding.pbBackupProgress.isIndeterminate = false
-                    binding.pbBackupProgress.max = total
-                    binding.pbBackupProgress.progress = current
-                    val pct = ((current.toDouble() / total.toDouble()) * 100).toInt().coerceIn(0, 100)
-                    binding.tvBackupProgressSubtitle.text = "Backing up: $current of $total items ($pct%)"
-                } else {
-                    binding.pbBackupProgress.isIndeterminate = true
-                    binding.tvBackupProgressSubtitle.text = "Scanning & hashing new media..."
-                }
-
-                if (speedBps > 0) {
-                    val speedMb = speedBps / (1024.0 * 1024.0)
-                    binding.tvBackupSpeed.text = String.format("%.1f MB/s", speedMb)
-                } else {
-                    binding.tvBackupSpeed.text = "Hashing..."
-                }
-
-                binding.tvBackupEta.text = formatEta(etaSec)
+            if (state.totalCount > 0) {
+                binding.pbBackupProgress.isIndeterminate = false
+                binding.pbBackupProgress.max = state.totalCount
+                binding.pbBackupProgress.progress = state.doneCount + state.uploadingCount
+                val currentFileSnippet = if (!state.currentFileName.isNullOrEmpty()) " • ${state.currentFileName}" else ""
+                binding.tvBackupProgressSubtitle.text =
+                    "Backing up: ${state.doneCount} of ${state.totalCount} (${state.percentComplete}%)$currentFileSnippet"
+            } else {
+                binding.pbBackupProgress.isIndeterminate = true
+                binding.tvBackupProgressSubtitle.text = "Scanning & hashing new media..."
             }
 
-            WorkInfo.State.SUCCEEDED -> {
-                binding.pbBackupProgress.visibility = View.GONE
-                binding.layoutBackupMetrics.visibility = View.GONE
+            if (state.speedBytesPerSec > 0) {
+                val speedMb = state.speedBytesPerSec / (1024.0 * 1024.0)
+                binding.tvBackupSpeed.text = String.format("%.1f MB/s", speedMb)
+            } else {
+                binding.tvBackupSpeed.text = "Hashing..."
+            }
+
+            binding.tvBackupEta.text = formatEta(state.etaSeconds)
+        } else {
+            binding.pbBackupProgress.visibility = View.GONE
+            binding.layoutBackupMetrics.visibility = View.GONE
+
+            if (!state.lastError.isNullOrEmpty() && state.failedCount > 0) {
+                binding.tvErrorReason.text = "${state.lastError} (${state.failedCount} file(s) failed)"
+                binding.layoutAttentionRequired.visibility = View.VISIBLE
+                binding.tvBackupProgressSubtitle.text = "Backup paused · Attention required"
+            } else {
                 binding.layoutAttentionRequired.visibility = View.GONE
-                val uploaded = workInfo.outputData.getInt(MediaSyncWorker.KEY_RESULT_UPLOADED, 0)
-                val skipped = workInfo.outputData.getInt(MediaSyncWorker.KEY_RESULT_SKIPPED, 0)
                 val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
                 val relativeTime = if (lastSync > 0L) {
                     DateUtils.getRelativeTimeSpanString(lastSync, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
-                } else "Just now"
+                } else "Ready"
 
-                if (uploaded > 0) {
-                    binding.tvBackupProgressSubtitle.text = "Backed up $uploaded items · $relativeTime"
-                } else if (skipped > 0) {
-                    binding.tvBackupProgressSubtitle.text = "All $skipped items backed up · $relativeTime"
+                if (state.isAllBackedUp) {
+                    binding.tvBackupProgressSubtitle.text = "All ${state.totalCount} items backed up · $relativeTime"
+                } else if (state.doneCount > 0) {
+                    binding.tvBackupProgressSubtitle.text = "${state.doneCount} of ${state.totalCount} backed up · $relativeTime"
                 } else {
-                    binding.tvBackupProgressSubtitle.text = "Up to date · $relativeTime"
+                    binding.tvBackupProgressSubtitle.text = "Connected · Ready to sync"
                 }
             }
-
-            WorkInfo.State.FAILED -> {
-                binding.pbBackupProgress.visibility = View.GONE
-                binding.layoutBackupMetrics.visibility = View.GONE
-                val reason = workInfo.outputData.getString(MediaSyncWorker.KEY_ERROR_REASON) 
-                    ?: "Storage node sync interrupted. Check connection."
-                binding.tvErrorReason.text = reason
-                binding.layoutAttentionRequired.visibility = View.VISIBLE
-                binding.tvBackupProgressSubtitle.text = "Backup paused · Attention required"
-            }
-
-            else -> {}
         }
     }
 

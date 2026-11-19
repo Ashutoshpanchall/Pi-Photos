@@ -219,6 +219,145 @@ class PiHttpClient(
             Result.failure(e)
         }
     }
+
+    suspend fun checkUpload(
+        endpointUrl: String,
+        authToken: String,
+        hashes: List<String>,
+        expectedFingerprint: String? = null
+    ): Result<CheckUploadResult> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint, connectTimeoutSec = 5, readTimeoutSec = 10)
+            val jsonArr = org.json.JSONArray(hashes)
+            val reqBody = JSONObject().put("hashes", jsonArr).toString()
+
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/upload/check")
+                .header("Authorization", "Bearer $authToken")
+                .post(reqBody.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(
+                        HttpException(resp.code, "Check failed HTTP ${resp.code}: $bodyStr")
+                    )
+                }
+                val json = JSONObject(bodyStr)
+                val existingArr = json.optJSONArray("existing") ?: org.json.JSONArray()
+                val existingSet = mutableSetOf<String>()
+                for (i in 0 until existingArr.length()) {
+                    existingSet.add(existingArr.getString(i))
+                }
+                val partialObj = json.optJSONObject("partial") ?: JSONObject()
+                val partialMap = mutableMapOf<String, Long>()
+                val keys = partialObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    partialMap[k] = partialObj.getLong(k)
+                }
+                Result.success(CheckUploadResult(existingSet, partialMap))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun uploadStreaming(
+        endpointUrl: String,
+        authToken: String,
+        sha256: String,
+        deviceId: String,
+        folder: String,
+        filename: String,
+        takenEpochSec: Long?,
+        totalSize: Long,
+        resumeOffset: Long,
+        contentUri: android.net.Uri,
+        mimeType: String,
+        expectedFingerprint: String? = null,
+        onBytesSent: (Long) -> Unit
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val ctx = context ?: return@withContext Result.failure(IOException("No context available"))
+        try {
+            val (client, _) = buildClient(expectedFingerprint, connectTimeoutSec = 10, readTimeoutSec = 60)
+            val lengthToSend = (totalSize - resumeOffset).coerceAtLeast(0L)
+
+            val requestBody = object : okhttp3.RequestBody() {
+                override fun contentType(): okhttp3.MediaType? = mimeType.toMediaType()
+                override fun contentLength(): Long = lengthToSend
+
+                override fun writeTo(sink: okio.BufferedSink) {
+                    ctx.contentResolver.openInputStream(contentUri)?.use { input ->
+                        if (resumeOffset > 0) {
+                            var skipped = 0L
+                            while (skipped < resumeOffset) {
+                                val s = input.skip(resumeOffset - skipped)
+                                if (s <= 0) break
+                                skipped += s
+                            }
+                        }
+                        val buffer = ByteArray(64 * 1024)
+                        var bytesRemaining = lengthToSend
+                        while (bytesRemaining > 0) {
+                            val toRead = minOf(buffer.size.toLong(), bytesRemaining).toInt()
+                            val read = input.read(buffer, 0, toRead)
+                            if (read == -1) break
+                            sink.write(buffer, 0, read)
+                            bytesRemaining -= read
+                            onBytesSent(read.toLong())
+                        }
+                    } ?: throw IOException("Cannot read content URI $contentUri")
+                }
+            }
+
+            val encodedFolder = java.net.URLEncoder.encode(folder, "UTF-8")
+            val encodedName = java.net.URLEncoder.encode(filename, "UTF-8")
+            var url = "$endpointUrl/api/v1/upload/$sha256?device=$deviceId&folder=$encodedFolder&name=$encodedName"
+            if (takenEpochSec != null && takenEpochSec > 0) {
+                url += "&taken=$takenEpochSec"
+            }
+
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $authToken")
+                .header("Upload-Offset", resumeOffset.toString())
+                .header("Content-Length", lengthToSend.toString())
+                .put(requestBody)
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (resp.isSuccessful) {
+                    return@withContext Result.success(Unit)
+                }
+                if (resp.code == 409) {
+                    try {
+                        val json = JSONObject(bodyStr)
+                        val detail = json.optJSONObject("detail")
+                        val errType = detail?.optString("error") ?: json.optString("error")
+                        if (errType == "offset_mismatch") {
+                            val realOffset = detail?.optLong("offset", 0L) ?: json.optLong("offset", 0L)
+                            return@withContext Result.failure(OffsetMismatchException(realOffset, "Offset mismatch"))
+                        }
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
+                Result.failure(HttpException(resp.code, "Upload failed HTTP ${resp.code}: $bodyStr"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
+
+data class CheckUploadResult(
+    val existing: Set<String>,
+    val partial: Map<String, Long>
+)
+
+class OffsetMismatchException(val serverOffset: Long, message: String) : IOException(message)
 
 class HttpException(val code: Int, message: String) : IOException(message)

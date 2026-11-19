@@ -9,8 +9,8 @@ import androidx.room.migration.Migration;
 import androidx.sqlite.db.SupportSQLiteDatabase;
 
 @Database(
-    entities = {FavoriteEntity.class, AlbumEntity.class, AlbumItemEntity.class, MediaIndexEntity.class},
-    version = 3,
+    entities = {FavoriteEntity.class, AlbumEntity.class, AlbumItemEntity.class, MediaIndexEntity.class, SyncLedgerEntity.class},
+    version = 4,
     exportSchema = false
 )
 public abstract class AppDatabase extends RoomDatabase {
@@ -18,6 +18,7 @@ public abstract class AppDatabase extends RoomDatabase {
     public abstract FavoriteDao favoriteDao();
     public abstract AlbumDao albumDao();
     public abstract MediaIndexDao mediaIndexDao();
+    public abstract SyncLedgerDao syncLedgerDao();
 
     public static final Migration MIGRATION_1_2 = new Migration(1, 2) {
         @Override
@@ -52,6 +53,25 @@ public abstract class AppDatabase extends RoomDatabase {
         }
     };
 
+    public static final Migration MIGRATION_3_4 = new Migration(3, 4) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            database.execSQL("CREATE TABLE IF NOT EXISTS `sync_ledger` ("
+                + "`media_id` INTEGER NOT NULL, "
+                + "`generation` INTEGER NOT NULL, "
+                + "`size` INTEGER NOT NULL, "
+                + "`sha256` TEXT, "
+                + "`status` TEXT NOT NULL, "
+                + "`attempts` INTEGER NOT NULL, "
+                + "`last_error` TEXT, "
+                + "`uploaded_at` INTEGER, "
+                + "`part_offset` INTEGER NOT NULL DEFAULT 0, "
+                + "PRIMARY KEY(`media_id`))");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_sync_ledger_status` ON `sync_ledger` (`status`)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_sync_ledger_sha256` ON `sync_ledger` (`sha256`)");
+        }
+    };
+
     private static volatile AppDatabase INSTANCE;
 
     public static AppDatabase getInstance(Context context) {
@@ -63,7 +83,7 @@ public abstract class AppDatabase extends RoomDatabase {
                         AppDatabase.class,
                         "piphotos_local.db"
                     )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .addCallback(new Callback() {
                         @Override
                         public void onOpen(@NonNull SupportSQLiteDatabase db) {
