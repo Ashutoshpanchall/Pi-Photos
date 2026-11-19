@@ -28,6 +28,7 @@ class UserRow:
     quota_bytes: int
     is_active: bool
     created_at: str
+    organise_by_date: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,12 +97,13 @@ class FolderStats:
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    role        TEXT NOT NULL DEFAULT 'member',
-    quota_bytes INTEGER NOT NULL DEFAULT 0,
-    is_active   INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    role             TEXT NOT NULL DEFAULT 'member',
+    quota_bytes      INTEGER NOT NULL DEFAULT 0,
+    is_active        INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL,
+    organise_by_date INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -176,6 +178,12 @@ class Database:
         # Initialise schema on the calling thread's connection.
         with self._cursor() as cur:
             cur.executescript(_SCHEMA)
+            try:
+                cur.execute(
+                    "ALTER TABLE users ADD COLUMN organise_by_date INTEGER NOT NULL DEFAULT 0"
+                )
+            except Exception:
+                pass
 
     # -- connection management -----------------------------------------------
 
@@ -214,16 +222,22 @@ class Database:
 
     # -- users ---------------------------------------------------------------
 
-    def create_user(self, name: str, role: str, quota_bytes: int) -> UserRow:
+    def create_user(
+        self,
+        name: str,
+        role: str,
+        quota_bytes: int,
+        organise_by_date: bool = False,
+    ) -> UserRow:
         uid = f"usr_{uuid.uuid4().hex[:12]}"
         now = self._now()
         with self._cursor() as cur:
             cur.execute(
-                "INSERT INTO users (id, name, role, quota_bytes, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (uid, name, role, quota_bytes, now),
+                "INSERT INTO users (id, name, role, quota_bytes, is_active, created_at, organise_by_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (uid, name, role, quota_bytes, 1, now, 1 if organise_by_date else 0),
             )
-        return UserRow(uid, name, role, quota_bytes, True, now)
+        return UserRow(uid, name, role, quota_bytes, True, now, organise_by_date)
 
     def get_user(self, user_id: str) -> Optional[UserRow]:
         with self._cursor() as cur:
@@ -231,29 +245,37 @@ class Database:
             row = cur.fetchone()
             if row is None:
                 return None
+            organise = bool(row["organise_by_date"]) if "organise_by_date" in row.keys() else False
             return UserRow(
                 row["id"], row["name"], row["role"],
                 row["quota_bytes"], bool(row["is_active"]), row["created_at"],
+                organise,
             )
 
     def list_users(self) -> list[UserRow]:
         with self._cursor() as cur:
             cur.execute("SELECT * FROM users ORDER BY created_at")
             return [
-                UserRow(r["id"], r["name"], r["role"],
-                        r["quota_bytes"], bool(r["is_active"]), r["created_at"])
+                UserRow(
+                    r["id"], r["name"], r["role"],
+                    r["quota_bytes"], bool(r["is_active"]), r["created_at"],
+                    bool(r["organise_by_date"]) if "organise_by_date" in r.keys() else False,
+                )
                 for r in cur.fetchall()
             ]
 
     def update_user(self, user_id: str, **kwargs: object) -> None:
-        allowed = {"name", "role", "quota_bytes", "is_active"}
+        allowed = {"name", "role", "quota_bytes", "is_active", "organise_by_date"}
         parts: list[str] = []
         vals: list[object] = []
         for k, v in kwargs.items():
             if k not in allowed:
                 raise ValueError(f"Cannot update field: {k}")
             parts.append(f"{k} = ?")
-            vals.append(v)
+            if k == "organise_by_date":
+                vals.append(1 if v else 0)
+            else:
+                vals.append(v)
         if not parts:
             return
         vals.append(user_id)
@@ -338,6 +360,32 @@ class Database:
             )
             return cur.fetchone() is not None
 
+    def get_first_file_by_hash(self, user_id: str, sha256: str) -> Optional[FileRow]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM files WHERE user_id = ? AND sha256 = ? LIMIT 1",
+                (user_id, sha256),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return FileRow(
+                row["id"], row["user_id"], row["device_id"], row["folder"],
+                row["relative_path"], row["sha256"], row["size"],
+                row["date_taken"], row["uploaded_at"],
+            )
+
+    def check_hashes_exist(self, user_id: str, hashes: list[str]) -> list[str]:
+        if not hashes:
+            return []
+        placeholders = ",".join("?" for _ in hashes)
+        with self._cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT sha256 FROM files WHERE user_id = ? AND sha256 IN ({placeholders})",
+                [user_id, *hashes],
+            )
+            return [r["sha256"] for r in cur.fetchall()]
+
     def insert_file(
         self,
         user_id: str,
@@ -406,6 +454,17 @@ class Database:
             if row is None:
                 return None
             return (row["offset"], row["part_path"])
+
+    def get_partial_offsets(self, user_id: str, hashes: list[str]) -> dict[str, int]:
+        if not hashes:
+            return {}
+        placeholders = ",".join("?" for _ in hashes)
+        with self._cursor() as cur:
+            cur.execute(
+                f"SELECT sha256, offset FROM partial_uploads WHERE user_id = ? AND sha256 IN ({placeholders})",
+                [user_id, *hashes],
+            )
+            return {r["sha256"]: r["offset"] for r in cur.fetchall()}
 
     def upsert_partial_upload(
         self, user_id: str, sha256: str, offset: int, part_path: str,

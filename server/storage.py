@@ -169,6 +169,14 @@ class StorageManager:
             shutil.copy2(str(src), str(dst))
             src.unlink()
 
+    def set_mtime(self, file_path: Path, date_taken: Optional[int]) -> None:
+        """Set the file's access and modification time to date_taken epoch seconds."""
+        if date_taken is not None and date_taken > 0:
+            try:
+                os.utime(str(file_path), (date_taken, date_taken))
+            except OSError:
+                pass
+
     def delete_user_files(self, user_slug: str) -> None:
         """Remove all files for a user."""
         user_dir = self.user_dir(user_slug)

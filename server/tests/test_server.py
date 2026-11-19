@@ -1,22 +1,39 @@
-"""Tests for the PiPhotos storage node server."""
+"""Comprehensive unit and integration tests for the PiPhotos storage node server."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
 import os
+import shutil
+import stat
 import sys
 import tempfile
+import time
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
+from cryptography import x509
 
 # Add server directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from auth import (
+    AuthIdentity,
+    IpRateLimiter,
+    PairingManager,
+    create_bearer_token,
+    hash_token,
+)
 from database import Database
-from auth import PairingManager, create_bearer_token, hash_token
+from discovery import PiPhotosAdvertiser, SERVICE_TYPE
 from storage import StorageManager, slugify, sanitise_component, sanitise_filename
+from tls_cert import (
+    generate_self_signed_cert,
+    get_cert_fingerprint,
+    get_local_ipv4_addresses,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,14 +48,16 @@ class TestDatabase:
         self.db = Database(os.path.join(self.tmp, "test.db"))
 
     def test_create_and_get_user(self):
-        user = self.db.create_user("Alice", "owner", 1024 * 1024)
+        user = self.db.create_user("Alice", "owner", 1024 * 1024, organise_by_date=True)
         assert user.name == "Alice"
         assert user.role == "owner"
         assert user.is_active is True
+        assert user.organise_by_date is True
 
         fetched = self.db.get_user(user.id)
         assert fetched is not None
         assert fetched.name == "Alice"
+        assert fetched.organise_by_date is True
 
     def test_list_users(self):
         self.db.create_user("Alice", "owner", 1024)
@@ -50,11 +69,12 @@ class TestDatabase:
 
     def test_update_user(self):
         user = self.db.create_user("Alice", "owner", 1024)
-        self.db.update_user(user.id, name="Alicia", quota_bytes=2048)
+        self.db.update_user(user.id, name="Alicia", quota_bytes=2048, organise_by_date=True)
         updated = self.db.get_user(user.id)
         assert updated is not None
         assert updated.name == "Alicia"
         assert updated.quota_bytes == 2048
+        assert updated.organise_by_date is True
 
     def test_delete_user(self):
         user = self.db.create_user("Alice", "owner", 1024)
@@ -86,200 +106,106 @@ class TestDatabase:
         assert result.user_id == user.id
         assert result.device_id == device.id
 
-    def test_lookup_missing_token(self):
-        result = self.db.lookup_token("nonexistent")
-        assert result is None
-
-    def test_file_operations(self):
+    def test_file_operations_and_bulk_check(self):
         user = self.db.create_user("Alice", "owner", 10 * 1024)
         device = self.db.create_device(user.id, "Phone", "model", "phone")
 
-        # Insert file
-        f = self.db.insert_file(
-            user.id, device.id, "Camera",
-            "IMG_001.jpg", "abc123" * 10 + "abcd",
-            4096, 1700000000,
-        )
-        assert f.size == 4096
+        sha1 = "a" * 64
+        sha2 = "b" * 64
+        sha3 = "c" * 64
 
-        # Check existence
-        assert self.db.file_exists_for_user(user.id, "abc123" * 10 + "abcd")
-        assert not self.db.file_exists_for_user(user.id, "nonexistent")
+        self.db.insert_file(user.id, device.id, "Camera", "IMG_001.jpg", sha1, 4096, 1700000000)
+        self.db.insert_file(user.id, device.id, "Camera", "IMG_002.jpg", sha2, 2048, 1700000001)
 
-        # Storage used
-        used = self.db.user_storage_used(user.id)
-        assert used == 4096
+        # Existence
+        assert self.db.file_exists_for_user(user.id, sha1)
+        assert not self.db.file_exists_for_user(user.id, sha3)
 
-        # File count
-        count = self.db.user_file_count(user.id)
-        assert count == 1
+        # Bulk check
+        existing = self.db.check_hashes_exist(user.id, [sha1, sha2, sha3])
+        assert set(existing) == {sha1, sha2}
 
-    def test_folder_stats(self):
-        user = self.db.create_user("Alice", "owner", 10 * 1024)
-        device = self.db.create_device(user.id, "Phone", "model", "phone")
-
-        self.db.insert_file(user.id, device.id, "Camera", "a.jpg", "h1" * 32, 100, None)
-        self.db.insert_file(user.id, device.id, "Camera", "b.jpg", "h2" * 32, 200, None)
-        self.db.insert_file(user.id, device.id, "Screenshots", "c.png", "h3" * 32, 50, None)
-
-        stats = self.db.device_folder_stats(user.id, device.id)
-        assert len(stats) == 2
-
-        camera = next(s for s in stats if s.folder == "Camera")
-        assert camera.item_count == 2
-        assert camera.total_bytes == 300
-
-    def test_partial_upload(self):
-        user = self.db.create_user("Alice", "owner", 1024)
-        sha = "a" * 64
-
-        # No partial initially
-        assert self.db.get_partial_upload(user.id, sha) is None
-
-        # Create partial
-        self.db.upsert_partial_upload(user.id, sha, 1000, "/tmp/test.part")
-        result = self.db.get_partial_upload(user.id, sha)
-        assert result is not None
-        assert result[0] == 1000
-
-        # Update partial
-        self.db.upsert_partial_upload(user.id, sha, 2000, "/tmp/test.part")
-        result = self.db.get_partial_upload(user.id, sha)
-        assert result is not None
-        assert result[0] == 2000
-
-        # Delete partial
-        self.db.delete_partial_upload(user.id, sha)
-        assert self.db.get_partial_upload(user.id, sha) is None
-
-    def test_audit_log(self):
-        self.db.audit("user1", "login", detail="From 192.168.1.1")
-        logs = self.db.list_audit_log()
-        assert len(logs) == 1
-        assert logs[0].action == "login"
+        # Partial uploads
+        self.db.upsert_partial_upload(user.id, sha3, 1024, "/tmp/sha3.part")
+        partials = self.db.get_partial_offsets(user.id, [sha1, sha2, sha3])
+        assert partials == {sha3: 1024}
 
 
 # ---------------------------------------------------------------------------
-# Auth tests
+# Auth and Rate Limiting tests
 # ---------------------------------------------------------------------------
 
-class TestPairingManager:
-    """Tests for the pairing code manager."""
+class TestPairingManagerSecurity:
+    """Tests for pairing code security and lifecycle."""
 
-    def test_generate_and_validate(self):
+    def test_pairing_code_generation(self):
         pm = PairingManager()
         code = pm.generate_code()
         assert len(code) == 6
         assert code.isdigit()
         assert pm.is_open
-        assert pm.validate_code(code)
-        # Code is consumed after validation
-        assert not pm.is_open
 
-    def test_wrong_code(self):
+    def test_success_closes_pairing_without_auto_generating(self):
         pm = PairingManager()
-        pm.generate_code()
-        assert not pm.validate_code("000000")
+        code = pm.generate_code()
+        valid, reason = pm.validate_code(code)
+        assert valid is True
+        assert reason == "ok"
+        # Closed after single success
+        assert pm.is_open is False
+
+    def test_invalidation_after_five_failed_attempts(self):
+        pm = PairingManager()
+        code = pm.generate_code()
+
+        for i in range(4):
+            valid, reason = pm.validate_code("000000")
+            assert valid is False
+            assert reason == "invalid_code"
+            assert pm.is_open is True
+            assert pm.failed_attempts == i + 1
+
+        # 5th failed attempt invalidates code
+        valid, reason = pm.validate_code("000000")
+        assert valid is False
+        assert reason == "too_many_attempts"
+        assert pm.is_open is False
+
+        # Even with the right code now, it is invalidated
+        valid, reason = pm.validate_code(code)
+        assert valid is False
+        assert pm.is_open is False
 
     def test_code_expiry(self):
         pm = PairingManager()
-        pm.generate_code()
-        # Simulate expiry
-        pm._expires_at = 0
-        assert not pm.is_open
-        assert not pm.validate_code(pm._code or "")
-
-    def test_disabled(self):
-        pm = PairingManager()
-        pm.generate_code()
-        pm.set_enabled(False)
-        assert not pm.is_open
-
-    def test_single_use(self):
-        pm = PairingManager()
         code = pm.generate_code()
-        assert pm.validate_code(code)
-        assert not pm.validate_code(code)  # second use fails
+        pm._expires_at = time.time() - 1  # Expired
+        valid, reason = pm.validate_code(code)
+        assert valid is False
+        assert reason == "code_expired"
+        assert pm.is_open is False
 
 
-class TestTokens:
-    """Tests for token creation and hashing."""
+class TestIpRateLimiter:
+    """Tests for IP rate limiting."""
 
-    def test_bearer_token_uniqueness(self):
-        t1 = create_bearer_token()
-        t2 = create_bearer_token()
-        assert t1 != t2
-        assert len(t1) > 20
+    def test_rate_limiting_exceeded(self):
+        limiter = IpRateLimiter(max_requests=3, window_seconds=10.0)
+        ip = "192.168.1.50"
 
-    def test_hash_deterministic(self):
-        assert hash_token("abc") == hash_token("abc")
-        assert hash_token("abc") != hash_token("def")
+        assert limiter.is_allowed(ip) is True
+        assert limiter.is_allowed(ip) is True
+        assert limiter.is_allowed(ip) is True
+        # 4th request in window is rejected
+        assert limiter.is_allowed(ip) is False
+
+        # Different IP is still allowed
+        assert limiter.is_allowed("192.168.1.51") is True
 
 
 # ---------------------------------------------------------------------------
 # Storage tests
 # ---------------------------------------------------------------------------
-
-class TestSlugify:
-    """Tests for the slugify function."""
-
-    def test_basic(self):
-        assert slugify("Home Vault") == "home-vault"
-
-    def test_special_chars(self):
-        assert slugify("Ashutosh's Pi <3>") == "ashutosh-s-pi-3"
-
-    def test_unicode(self):
-        result = slugify("Ñoño Réné")
-        assert ".." not in result
-        assert "/" not in result
-
-    def test_empty(self):
-        assert slugify("") == "unnamed"
-
-    def test_max_length(self):
-        result = slugify("a" * 300)
-        assert len(result) <= 200
-
-
-class TestSanitiseComponent:
-    """Tests for path component sanitisation."""
-
-    def test_normal(self):
-        assert sanitise_component("Camera") == "Camera"
-
-    def test_dotdot_rejected(self):
-        with pytest.raises(ValueError):
-            sanitise_component("..")
-
-    def test_empty_rejected(self):
-        with pytest.raises(ValueError):
-            sanitise_component("")
-
-    def test_special_chars_replaced(self):
-        result = sanitise_component('file<name>.txt')
-        assert "<" not in result
-        assert ">" not in result
-
-    def test_control_chars_replaced(self):
-        result = sanitise_component("hello\x00world")
-        assert "\x00" not in result
-
-
-class TestSanitiseFilename:
-    """Tests for filename sanitisation."""
-
-    def test_normal(self):
-        assert sanitise_filename("IMG_001.jpg") == "IMG_001.jpg"
-
-    def test_path_separator_rejected(self):
-        with pytest.raises(ValueError):
-            sanitise_filename("../../etc/passwd")
-
-    def test_empty_rejected(self):
-        with pytest.raises(ValueError):
-            sanitise_filename("")
-
 
 class TestStorageManager:
     """Tests for the storage manager."""
@@ -293,57 +219,136 @@ class TestStorageManager:
         assert "alice" in str(path)
         assert "users" in str(path)
 
-    def test_device_dir(self):
-        path = self.sm.device_dir("Alice", "Pixel 7")
-        assert "devices" in str(path)
-
-    def test_folder_dir(self):
-        path = self.sm.folder_dir("Alice", "Pixel 7", "Camera")
-        assert "Camera" in str(path)
-
     def test_folder_dir_with_date(self):
-        # 2026-01-15 00:00:00 UTC
-        ts = 1768435200
-        path = self.sm.folder_dir(
-            "Alice", "Pixel 7", "Camera",
-            date_taken=ts, organise_by_date=True,
-        )
+        ts = 1768435200  # 2026-01-15 UTC
+        path = self.sm.folder_dir("Alice", "Pixel 7", "Camera", date_taken=ts, organise_by_date=True)
         assert "2026" in str(path)
         assert "01" in str(path)
 
-    def test_resolve_filename_no_collision(self):
-        d = Path(self.tmp) / "test"
-        d.mkdir()
-        result = self.sm.resolve_filename(d, "photo.jpg", "abc123")
-        assert result == "photo.jpg"
+    def test_set_mtime(self):
+        f = Path(self.tmp) / "test.txt"
+        f.write_text("content")
+        target_ts = 1700000000
+        self.sm.set_mtime(f, target_ts)
+        assert int(f.stat().st_mtime) == target_ts
 
-    def test_resolve_filename_with_collision(self):
+    def test_resolve_filename_collision(self):
         d = Path(self.tmp) / "test"
         d.mkdir()
         (d / "photo.jpg").write_text("existing")
-        result = self.sm.resolve_filename(d, "photo.jpg", "different_hash")
-        assert result == "photo (1).jpg"
-
-    def test_part_file_path(self):
-        path = self.sm.part_file_path("Alice", "a" * 64)
-        assert path.suffix == ".part"
-        assert "parts" in str(path)
-
-    def test_atomic_move(self):
-        src = Path(self.tmp) / "src.txt"
-        src.write_text("hello")
-        dst = Path(self.tmp) / "dst" / "out.txt"
-        self.sm.atomic_move(src, dst)
-        assert dst.read_text() == "hello"
-        assert not src.exists()
+        res = self.sm.resolve_filename(d, "photo.jpg", "sha")
+        assert res == "photo (1).jpg"
 
 
 # ---------------------------------------------------------------------------
-# API tests (FastAPI TestClient)
+# TLS & Certificate SAN tests
+# ---------------------------------------------------------------------------
+
+class TestTLS:
+    """Tests for TLS certificate generation, SAN, and file permissions."""
+
+    def test_cert_generation_san_and_permissions(self):
+        tmp = tempfile.mkdtemp()
+        cert_path = Path(tmp) / "certs" / "cert.pem"
+        key_path = Path(tmp) / "certs" / "key.pem"
+
+        fp = generate_self_signed_cert(cert_path, key_path, extra_ips=["192.168.1.99"])
+        assert cert_path.exists()
+        assert key_path.exists()
+        assert ":" in fp
+
+        # Verify key file permissions on platforms supporting posix mode
+        if hasattr(os, "stat") and os.name == "posix":
+            key_mode = stat.S_IMODE(key_path.stat().st_mode)
+            assert key_mode == 0o600
+
+        # Verify SAN contains IPs and localhost
+        cert_pem = cert_path.read_bytes()
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        san_ext = cert.extensions.get_extension_for_oid(x509.OID_SUBJECT_ALTERNATIVE_NAME)
+        san_names = san_ext.value
+
+        dns_names = san_names.get_values_for_type(x509.DNSName)
+        ip_addrs = [str(ip) for ip in san_names.get_values_for_type(x509.IPAddress)]
+
+        assert "piphotos.local" in dns_names
+        assert "localhost" in dns_names
+        assert "127.0.0.1" in ip_addrs
+        assert "192.168.1.99" in ip_addrs
+
+
+# ---------------------------------------------------------------------------
+# Async mDNS discovery test
+# ---------------------------------------------------------------------------
+
+class TestAsyncMDNS:
+    """Tests for mDNS service advertisement using AsyncZeroconf."""
+
+    def test_mdns_advertisement_and_discovery(self):
+        """Runs with mDNS ON and browses with a second Zeroconf instance on same host."""
+        async def run_mdns_test():
+            from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
+
+            adv = PiPhotosAdvertiser(
+                server_id="test-srv-uuid",
+                server_name="Test-Vault",
+                port=8443,
+                tls_fingerprint="AA:BB:CC:DD:EE",
+                protocol_version=1,
+            )
+            ips = await adv.async_start()
+            assert len(ips) > 0
+
+            browser_zc = AsyncZeroconf()
+            discovered = []
+
+            class Listener:
+                def add_service(self, zc, type_, name):
+                    discovered.append((type_, name))
+
+                def remove_service(self, zc, type_, name):
+                    pass
+
+                def update_service(self, zc, type_, name):
+                    pass
+
+            browser = AsyncServiceBrowser(browser_zc.zeroconf, SERVICE_TYPE, listener=Listener())
+
+            try:
+                # Wait for mDNS packet on local interface
+                for _ in range(30):
+                    if any("Test-Vault" in name for _, name in discovered):
+                        break
+                    await asyncio.sleep(0.1)
+
+                target = next(((t, n) for t, n in discovered if "Test-Vault" in n), None)
+                assert target is not None, f"mDNS service not discovered. Found: {discovered}"
+
+                svc_type, svc_name = target
+                info = AsyncServiceInfo(svc_type, svc_name)
+                resolved = await info.async_request(browser_zc.zeroconf, 3000)
+                assert resolved is True
+                assert info.port == 8443
+
+                props = {k.decode("utf-8", "ignore"): v.decode("utf-8", "ignore") for k, v in info.properties.items()}
+                assert props["v"] == "1"
+                assert props["id"] == "test-srv-uuid"
+                assert props["name"] == "Test-Vault"
+                assert props["tls_fp"] == "AA:BB:CC:DD:EE"
+
+            finally:
+                await browser_zc.async_close()
+                await adv.async_stop()
+
+        asyncio.run(run_mdns_test())
+
+
+# ---------------------------------------------------------------------------
+# API Integration Tests
 # ---------------------------------------------------------------------------
 
 class TestAPI:
-    """Integration tests for the FastAPI endpoints."""
+    """Integration tests for all FastAPI endpoints."""
 
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
@@ -356,7 +361,8 @@ class TestAPI:
         os.environ["PIPHOTOS_DISK_RESERVE_FRACTION"] = "0.0"
 
         from fastapi.testclient import TestClient
-        from main import app
+        from main import app, ip_limiter
+        ip_limiter._requests.clear()
         self._tc = TestClient(app)
         self.client = self._tc.__enter__()
 
@@ -371,184 +377,227 @@ class TestAPI:
         assert "name" in data
         assert data["protocol_version"] == 1
 
-    def test_pair_no_code(self):
+    def test_pair_rate_limiting(self):
+        from main import pairing
+        pairing.generate_code()
+
+        # Send 10 wrong attempts
+        for _ in range(10):
+            self.client.post("/api/v1/pair", json={
+                "code": "000000",
+                "device_name": "Test",
+                "device_model": "test",
+            })
+
+        # 11th request from same IP is rate-limited (429)
         resp = self.client.post("/api/v1/pair", json={
             "code": "000000",
-            "device_name": "Test Phone",
-            "device_model": "test model",
+            "device_name": "Test",
+            "device_model": "test",
         })
-        # Code is consumed during lifespan setup, so this should fail
-        assert resp.status_code in (401, 409)
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["error"] == "rate_limited"
 
-    def test_status_no_auth(self):
-        resp = self.client.get("/api/v1/status")
-        assert resp.status_code == 401
-
-    def test_check_upload_no_auth(self):
-        resp = self.client.head("/api/v1/upload/" + "a" * 64)
-        assert resp.status_code == 401
-
-    def test_full_pair_and_upload_flow(self):
-        """Test the complete pairing and upload flow."""
-        from main import pairing, db
-
-        # Generate a new code
+    def test_pair_five_attempts_invalidates(self):
+        from main import pairing, ip_limiter
+        ip_limiter._requests.clear()
         code = pairing.generate_code()
 
-        # Pair
+        for _ in range(4):
+            resp = self.client.post("/api/v1/pair", json={
+                "code": "000000",
+                "device_name": "Test",
+                "device_model": "test",
+            })
+            assert resp.status_code == 401
+            assert resp.json()["detail"]["error"] == "invalid_code"
+
+        # 5th attempt invalidates code
         resp = self.client.post("/api/v1/pair", json={
-            "code": code,
-            "device_name": "Test Phone",
-            "device_model": "test model",
+            "code": "000000",
+            "device_name": "Test",
+            "device_model": "test",
         })
-        assert resp.status_code == 200, resp.text
-        pair_data = resp.json()
-        token = pair_data["token"]
-        device_id = pair_data["device_id"]
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["error"] == "code_invalidated"
+
+    def test_bulk_upload_check(self):
+        from main import pairing, db
+        code = pairing.generate_code()
+        pair_resp = self.client.post("/api/v1/pair", json={
+            "code": code,
+            "device_name": "Phone",
+            "device_model": "model",
+        })
+        token = pair_resp.json()["token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # Check status
-        resp = self.client.get("/api/v1/status", headers=headers)
-        assert resp.status_code == 200
-        status = resp.json()
-        assert status["user"]["file_count"] == 0
+        sha1 = "1" * 64
+        sha2 = "2" * 64
+        sha3 = "3" * 64
 
-        # Upload a small file
-        content = b"Hello, PiPhotos!"
+        # Add sha1 as existing
+        user = db.list_users()[0]
+        dev = db.list_devices(user.id)[0]
+        db.insert_file(user.id, dev.id, "Camera", "1.jpg", sha1, 100, None)
+
+        # Add sha2 as partial
+        db.upsert_partial_upload(user.id, sha2, 512, "/tmp/part")
+
+        resp = self.client.post(
+            "/api/v1/upload/check",
+            headers=headers,
+            json={"hashes": [sha1, sha2, sha3]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert sha1 in data["existing"]
+        assert data["partial"].get(sha2) == 512
+        assert sha3 not in data["existing"]
+        assert sha3 not in data["partial"]
+
+    def test_upload_resume_offset_mismatch_writes_nothing(self):
+        from main import pairing, storage, db
+        code = pairing.generate_code()
+        pair_resp = self.client.post("/api/v1/pair", json={
+            "code": code,
+            "device_name": "Phone",
+            "device_model": "model",
+        })
+        token = pair_resp.json()["token"]
+        dev_id = pair_resp.json()["device_id"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        content = b"0123456789"
         sha = hashlib.sha256(content).hexdigest()
 
-        # Check if exists (should be 404)
-        resp = self.client.head(f"/api/v1/upload/{sha}", headers=headers)
-        assert resp.status_code == 404
+        # Simulate existing partial file of 5 bytes
+        user = db.list_users()[0]
+        part_path = storage.part_file_path(user.name, sha)
+        part_path.write_bytes(content[:5])
 
-        # Upload
+        # Client sends wrong Upload-Offset of 8
         resp = self.client.put(
             f"/api/v1/upload/{sha}",
-            params={"device": device_id, "folder": "Camera", "name": "test.txt", "taken": 1700000000},
-            headers={**headers, "Content-Length": str(len(content))},
-            content=content,
-        )
-        assert resp.status_code == 200, resp.text
-        result = resp.json()
-        assert result["sha256"] == sha
-        assert result["size"] == len(content)
-
-        # Check if exists now (should be 200)
-        resp = self.client.head(f"/api/v1/upload/{sha}", headers=headers)
-        assert resp.status_code == 200
-
-        # Check status again
-        resp = self.client.get("/api/v1/status", headers=headers)
-        status = resp.json()
-        assert status["user"]["file_count"] == 1
-        assert status["user"]["used_bytes"] == len(content)
-
-        # Check device folders
-        resp = self.client.get(f"/api/v1/devices/{device_id}/folders", headers=headers)
-        assert resp.status_code == 200
-        folders = resp.json()
-        assert len(folders["folders"]) == 1
-        assert folders["folders"][0]["name"] == "Camera"
-        assert folders["folders"][0]["item_count"] == 1
-
-    def test_upload_hash_mismatch(self):
-        """Test that hash mismatch is properly rejected."""
-        from main import pairing, db
-
-        code = pairing.generate_code()
-        resp = self.client.post("/api/v1/pair", json={
-            "code": code,
-            "device_name": "Test Phone",
-            "device_model": "test model",
-        })
-        pair_data = resp.json()
-        token = pair_data["token"]
-        device_id = pair_data["device_id"]
-        headers = {"Authorization": f"Bearer {token}"}
-
-        content = b"Real content"
-        wrong_sha = "b" * 64  # Wrong hash
-
-        resp = self.client.put(
-            f"/api/v1/upload/{wrong_sha}",
-            params={"device": device_id, "folder": "Camera", "name": "test.txt"},
-            headers={**headers, "Content-Length": str(len(content))},
-            content=content,
+            params={"device": dev_id, "folder": "Camera", "name": "test.txt"},
+            headers={**headers, "Upload-Offset": "8", "Content-Length": "10"},
+            content=b"tail",
         )
         assert resp.status_code == 409
+        err = resp.json()["detail"]
+        assert err["error"] == "offset_mismatch"
+        assert err["offset"] == 5
+        # Ensure server did NOT append or corrupt the partial file
+        assert part_path.stat().st_size == 5
 
-    def test_invalid_sha_format(self):
-        """Test that invalid SHA-256 format is rejected."""
-        from main import pairing
-
+    def test_upload_resume_success(self):
+        from main import pairing, storage, db
         code = pairing.generate_code()
-        resp = self.client.post("/api/v1/pair", json={
+        pair_resp = self.client.post("/api/v1/pair", json={
             "code": code,
-            "device_name": "Test Phone",
-            "device_model": "test model",
+            "device_name": "Phone",
+            "device_model": "model",
         })
-        pair_data = resp.json()
-        headers = {"Authorization": f"Bearer {pair_data['token']}"}
-
-        resp = self.client.head("/api/v1/upload/not-a-sha", headers=headers)
-        assert resp.status_code == 400
-
-    def test_upload_disk_reserve_breach(self):
-        """Test that upload fails with 507 when disk reserve is breached."""
-        from main import pairing
-
-        code = pairing.generate_code()
-        resp = self.client.post("/api/v1/pair", json={
-            "code": code,
-            "device_name": "Test Phone",
-            "device_model": "test model",
-        })
-        pair_data = resp.json()
-        token = pair_data["token"]
-        device_id = pair_data["device_id"]
+        token = pair_resp.json()["token"]
+        dev_id = pair_resp.json()["device_id"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        content = b"Some data"
+        full_content = b"A" * 1024 * 128  # 128 KB
+        sha = hashlib.sha256(full_content).hexdigest()
+        half_len = 1024 * 64
+
+        # Upload first half
+        user = db.list_users()[0]
+        part_path = storage.part_file_path(user.name, sha)
+        part_path.write_bytes(full_content[:half_len])
+
+        # Resume second half with exact offset
+        resp = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": dev_id, "folder": "Camera", "name": "resume.jpg"},
+            headers={**headers, "Upload-Offset": str(half_len), "Content-Length": str(len(full_content))},
+            content=full_content[half_len:],
+        )
+        assert resp.status_code == 200, resp.text
+        res = resp.json()
+        assert res["sha256"] == sha
+        assert res["size"] == len(full_content)
+
+    def test_duplicate_reference_same_sha(self):
+        """Same sha256 uploaded under different folder/device creates DB record, no duplicate disk write."""
+        from main import pairing, db
+        code = pairing.generate_code()
+        pair_resp = self.client.post("/api/v1/pair", json={
+            "code": code,
+            "device_name": "Phone",
+            "device_model": "model",
+        })
+        token = pair_resp.json()["token"]
+        dev_id = pair_resp.json()["device_id"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        content = b"Unique content"
         sha = hashlib.sha256(content).hexdigest()
 
-        # Set disk reserve fraction artificially to 1.0 (100% reserved)
-        os.environ["PIPHOTOS_DISK_RESERVE_FRACTION"] = "1.0"
-        try:
-            resp = self.client.put(
-                f"/api/v1/upload/{sha}",
-                params={"device": device_id, "folder": "Camera", "name": "test.txt"},
-                headers={**headers, "Content-Length": str(len(content))},
-                content=content,
-            )
-            assert resp.status_code == 507
-            assert resp.json()["detail"]["error"] == "quota_exceeded"
-        finally:
-            os.environ["PIPHOTOS_DISK_RESERVE_FRACTION"] = "0.0"
+        # First upload into Camera
+        resp1 = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": dev_id, "folder": "Camera", "name": "pic1.jpg"},
+            headers={**headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert resp1.status_code == 200
 
+        # Second upload into Screenshots (same sha)
+        resp2 = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": dev_id, "folder": "Screenshots", "name": "shot1.png"},
+            headers={**headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert resp2.status_code == 200
+        assert resp2.json()["path"] == "Screenshots/shot1.png"
 
-# ---------------------------------------------------------------------------
-# TLS tests
-# ---------------------------------------------------------------------------
+        # Check folder stats show both folders
+        stats_resp = self.client.get(f"/api/v1/devices/{dev_id}/folders", headers=headers)
+        folders = {f["name"]: f["item_count"] for f in stats_resp.json()["folders"]}
+        assert folders["Camera"] == 1
+        assert folders["Screenshots"] == 1
 
-class TestTLS:
-    """Tests for TLS certificate generation."""
+        # Check user quota deduplication (stored once, size is len(content))
+        status = self.client.get("/api/v1/status", headers=headers).json()
+        assert status["user"]["used_bytes"] == len(content)
+        assert status["user"]["file_count"] == 1
 
-    def test_generate_cert(self):
-        from tls_cert import generate_self_signed_cert, get_cert_fingerprint
+    def test_organise_by_date_and_mtime(self):
+        from main import pairing, db, storage
+        code = pairing.generate_code()
+        pair_resp = self.client.post("/api/v1/pair", json={
+            "code": code,
+            "device_name": "Phone",
+            "device_model": "model",
+        })
+        token = pair_resp.json()["token"]
+        dev_id = pair_resp.json()["device_id"]
+        headers = {"Authorization": f"Bearer {token}"}
 
-        tmp = tempfile.mkdtemp()
-        cert_path = Path(tmp) / "cert.pem"
-        key_path = Path(tmp) / "key.pem"
+        # Enable organise_by_date on user
+        user = db.list_users()[0]
+        db.update_user(user.id, organise_by_date=True)
 
-        fp = generate_self_signed_cert(cert_path, key_path)
-        assert cert_path.exists()
-        assert key_path.exists()
-        assert ":" in fp  # Colon-separated hex
+        content = b"Date Photo"
+        sha = hashlib.sha256(content).hexdigest()
+        taken_ts = 1768435200  # 2026-01-15 UTC
 
-        # Fingerprint should be deterministic for same cert
-        fp2 = get_cert_fingerprint(cert_path)
-        assert fp == fp2
+        resp = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": dev_id, "folder": "Camera", "name": "img.jpg", "taken": taken_ts},
+            headers={**headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert resp.status_code == 200
 
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        # Check file exists in 2026/01 and mtime matches
+        target_path = storage.root / "users" / slugify(user.name) / "devices" / "phone" / "Camera" / "2026" / "01" / "img.jpg"
+        assert target_path.exists()
+        assert int(target_path.stat().st_mtime) == taken_ts

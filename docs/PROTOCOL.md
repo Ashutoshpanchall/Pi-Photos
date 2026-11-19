@@ -11,7 +11,9 @@ Pi Zero 2 W with 512 MB RAM).
 
 ### mDNS
 
-The server advertises itself via mDNS as `_piphotos._tcp.local.` with TXT records:
+The server advertises itself asynchronously via mDNS (`AsyncZeroconf`) as
+`_piphotos._tcp.local.` with the machine's actual IPv4 addresses in `addresses`
+and TXT records:
 
 | Key      | Value                                      |
 |----------|--------------------------------------------|
@@ -33,10 +35,23 @@ The server prints a QR code on startup containing a JSON payload:
 }
 ```
 
+## TLS & Certificate Pinning
+
+The server generates a self-signed EC (P-256) certificate on first run:
+- Subject Alternative Name (SAN) contains the server's LAN IP addresses,
+  system hostname, `piphotos.local`, `localhost`, and `127.0.0.1`.
+- The client pins the SHA-256 fingerprint of the certificate upon initial
+  pairing (Trust-On-First-Use — TOFU).
+- Because local network addresses vary (DHCP, mDNS `.local`), the Android client
+  skips standard CA and hostname verification in favor of strict SHA-256
+  fingerprint pinning.
+- Server private keys (`key.pem`) are stored with mode `0600` and certificates
+  directory with mode `0700`.
+
 ## Authentication
 
-All endpoints except `GET /api/v1/info` require a Bearer token in the
-`Authorization` header:
+All endpoints except `GET /api/v1/info` and `POST /api/v1/pair` require a Bearer
+token in the `Authorization` header:
 
 ```
 Authorization: Bearer <token>
@@ -44,12 +59,6 @@ Authorization: Bearer <token>
 
 Tokens are issued during pairing and are per-device. They are stored hashed
 (SHA-256) on the server.
-
-## TLS
-
-The server generates a self-signed certificate on first run. The certificate's
-SHA-256 fingerprint is advertised via mDNS and QR code. Clients pin the
-fingerprint at pairing time (trust on first use — TOFU).
 
 ## Endpoints
 
@@ -72,10 +81,16 @@ Returns server identity and pairing availability.
 
 ### POST /api/v1/pair
 
-**Auth:** None (but requires a valid pairing code)
+**Auth:** None (protected by 6-digit code and IP rate-limiting)
 
-Pairs a device with the server. The pairing code is a 6-digit number displayed
-in the server console and expires after 10 minutes.
+Pairs a device with the server.
+
+**Rules:**
+- 6-digit code displayed in server console; expires after 10 minutes.
+- Rate-limited per client IP (HTTP 429 if exceeded).
+- Invalidation after 5 failed code attempts (HTTP 401 `code_invalidated`).
+- Closes immediately upon 1 successful pairing (does NOT auto-generate a new code).
+  Pairing opens only upon explicit owner action.
 
 **Request:**
 ```json
@@ -95,7 +110,7 @@ in the server console and expires after 10 minutes.
 }
 ```
 
-**Error 401:** Invalid or expired pairing code.
+**Error 401:** Invalid code or code invalidated due to 5 failed attempts.
 ```json
 {
   "error": "invalid_code",
@@ -103,7 +118,9 @@ in the server console and expires after 10 minutes.
 }
 ```
 
-**Error 409:** Pairing is not open (disabled by admin).
+**Error 409:** Pairing is closed.
+
+**Error 429:** Rate limited (too many pairing attempts from this IP).
 
 ### GET /api/v1/status
 
@@ -125,20 +142,51 @@ Returns disk and quota information for the authenticated user.
     "used_bytes": 53687091200,
     "free_bytes": 53687091200,
     "file_count": 1204,
-    "soft_quota_warning": null
+    "soft_quota_warning": null,
+    "organise_by_date": false
   }
 }
 ```
 
 `soft_quota_warning` is `"80%"` or `"90%"` when the user approaches their quota,
-otherwise `null`.
+otherwise `null`. 10% of the disk is kept reserved.
+
+### POST /api/v1/upload/check
+
+**Auth:** Required
+
+Batch check for existing files and resumable partial upload offsets. This allows
+the client to query status for hundreds of files in a single request instead of
+hundreds of `HEAD` requests.
+
+**Request:**
+```json
+{
+  "hashes": [
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+  ]
+}
+```
+
+**Response 200:**
+```json
+{
+  "existing": [
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "partial": {
+    "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb": 1048576
+  }
+}
+```
 
 ### HEAD /api/v1/upload/{sha256}
 
 **Auth:** Required
 
-Checks whether the authenticated user already has a file with the given SHA-256
-hash.
+Single-file check whether the authenticated user already has a file with the
+given SHA-256 hash.
 
 **Response 200:** File exists (already backed up). No body.
 
@@ -174,7 +222,21 @@ Uploads a file. The request body is the raw file bytes, streamed.
 | `Content-Length`  | Yes      | Total file size in bytes                 |
 | `Upload-Offset`  | No       | Byte offset for resume (default 0)       |
 
-**Response 201:** Upload complete.
+**Resume & Integrity Rules:**
+- If `Upload-Offset` != server partial file size, replies **409 Conflict** with
+  `{"error": "offset_mismatch", "message": "...", "offset": <actual>}` and writes
+  nothing.
+- Hashing and file writes are executed off the event loop.
+- Dynamic quota and disk reserve enforcement halts upload and returns **507** if
+  exceeded mid-stream.
+- Concurrent uploads of the same `(user, sha256)` are rejected with **409**
+  `{"error": "upload_in_progress"}`.
+- If the content (same SHA-256) already exists for the user, a duplicate reference
+  is recorded in the SQLite database under the new device/folder/name without
+  writing a second file to disk.
+- If `taken` is provided, the stored file's `mtime` is set to `taken`.
+
+**Response 201 / 200:** Upload complete.
 ```json
 {
   "sha256": "abcdef...",
@@ -183,22 +245,9 @@ Uploads a file. The request body is the raw file bytes, streamed.
 }
 ```
 
-**Error 409:** SHA-256 mismatch — the hash of the received bytes does not match
-the hash in the URL.
-```json
-{
-  "error": "hash_mismatch",
-  "message": "SHA-256 of uploaded data does not match the URL"
-}
-```
+**Error 409:** SHA-256 mismatch, offset mismatch, or upload in progress.
 
 **Error 507:** Quota exceeded or disk reserve would be breached.
-```json
-{
-  "error": "quota_exceeded",
-  "message": "Upload would exceed your storage quota (100 GB)"
-}
-```
 
 ### GET /api/v1/devices/{device_id}/folders
 
@@ -266,16 +315,22 @@ Per-user setting `organise_by_date` (default `false`). When enabled:
 Camera/2026/01/IMG_20260101_120000.jpg
 ```
 
+File modification time (`mtime`) is set to `date_taken` when provided.
+
 ## Error Codes
 
-| HTTP | Error Key          | Meaning                                   |
-|------|--------------------|-------------------------------------------|
-| 400  | `bad_request`      | Invalid request parameters                |
-| 401  | `unauthorized`     | Missing or invalid auth token             |
-| 401  | `invalid_code`     | Invalid or expired pairing code           |
-| 403  | `forbidden`        | Insufficient permissions                  |
-| 404  | `not_found`        | Resource not found                        |
-| 409  | `hash_mismatch`    | Uploaded data SHA-256 does not match URL  |
-| 409  | `pairing_closed`   | Pairing is currently disabled             |
-| 507  | `quota_exceeded`   | User quota or disk reserve exceeded       |
-| 500  | `internal_error`   | Unexpected server error                   |
+| HTTP | Error Key              | Meaning                                    |
+|------|------------------------|--------------------------------------------|
+| 400  | `bad_request`          | Invalid request parameters                 |
+| 401  | `unauthorized`         | Missing or invalid auth token              |
+| 401  | `invalid_code`         | Invalid or expired pairing code            |
+| 401  | `code_invalidated`     | 5 failed attempts; code invalidated        |
+| 403  | `forbidden`            | Insufficient permissions                   |
+| 404  | `not_found`            | Resource not found                         |
+| 409  | `hash_mismatch`        | Uploaded data SHA-256 does not match URL   |
+| 409  | `offset_mismatch`      | Upload-Offset does not match part file     |
+| 409  | `upload_in_progress`   | Upload for this hash already in progress   |
+| 409  | `pairing_closed`       | Pairing is currently disabled              |
+| 429  | `rate_limited`         | Too many requests from this IP             |
+| 507  | `quota_exceeded`       | User quota or disk reserve exceeded        |
+| 500  | `internal_error`       | Unexpected server error                    |

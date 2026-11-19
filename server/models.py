@@ -29,6 +29,10 @@ class PairRequest(BaseModel):
     device_model: str = Field(..., min_length=1, max_length=200)
 
 
+class CheckUploadRequest(BaseModel):
+    hashes: list[str] = Field(..., max_length=1000)
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
@@ -60,6 +64,7 @@ class UserQuota(BaseModel):
     free_bytes: int
     file_count: int
     soft_quota_warning: Optional[str] = None
+    organise_by_date: bool = False
 
 
 class StatusResponse(BaseModel):
@@ -71,6 +76,11 @@ class UploadResult(BaseModel):
     sha256: str
     size: int
     path: str
+
+
+class CheckUploadResponse(BaseModel):
+    existing: list[str]
+    partial: dict[str, int]
 
 
 class FolderInfo(BaseModel):
@@ -88,3 +98,9 @@ class DeviceFoldersResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     message: str
+
+
+class OffsetMismatchDetail(BaseModel):
+    error: str = "offset_mismatch"
+    message: str
+    offset: int
