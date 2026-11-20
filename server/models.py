@@ -104,3 +104,76 @@ class OffsetMismatchDetail(BaseModel):
     error: str = "offset_mismatch"
     message: str
     offset: int
+
+
+# ---------------------------------------------------------------------------
+# Phase U1: Admin and User Management models
+# ---------------------------------------------------------------------------
+
+class AdminUserSummary(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    slug: str
+    role: str
+    status: str
+    quota_bytes: int
+    used_bytes: int
+    file_count: int
+    devices_count: int
+    last_seen_at: Optional[str] = None
+
+
+class CreateUserRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=100)
+    quota_bytes: int = Field(default=0, ge=0)
+
+
+class CreateUserResponse(BaseModel):
+    user: AdminUserSummary
+    invite_code: str
+    expires_at: str
+    qr_payload: str
+
+
+class UpdateUserRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    quota_bytes: Optional[int] = Field(default=None, ge=0)
+    status: Optional[str] = Field(default=None, pattern="^(active|disabled)$")
+    role: Optional[str] = Field(default=None, pattern="^(owner|member)$")
+
+
+class InviteResponse(BaseModel):
+    invite_code: str
+    expires_at: str
+    qr_payload: str
+
+
+class DeviceSummary(BaseModel):
+    id: str
+    name: str
+    model: str
+    slug: str
+    created_at: str
+    last_seen_at: Optional[str] = None
+
+
+class OpenPairingResponse(BaseModel):
+    code: str
+    expires_in_seconds: int = 600
+
+
+class UserOverview(BaseModel):
+    id: str
+    name: str
+    role: str
+    quota_bytes: int
+    used_bytes: int
+    file_count: int
+
+
+class AdminOverviewResponse(BaseModel):
+    disk: DiskInfo
+    allocated_quota_total: int
+    over_allocated: bool
+    users: list[UserOverview]

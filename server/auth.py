@@ -123,6 +123,26 @@ class PairingManager:
             self._failed_attempts = 0
             return True, "ok"
 
+    def record_failed_attempt(self) -> int:
+        with self._lock:
+            self._failed_attempts += 1
+            if self._failed_attempts >= self.MAX_FAILED_ATTEMPTS:
+                self._code = None
+            return self._failed_attempts
+
+    def reset_attempts(self) -> None:
+        with self._lock:
+            self._failed_attempts = 0
+
+    def open_pairing(self, duration_minutes: int = 10) -> str:
+        with self._lock:
+            code = f"{secrets.randbelow(1_000_000):06d}"
+            self._code = code
+            self._expires_at = time.time() + (duration_minutes * 60)
+            self._failed_attempts = 0
+            self._enabled = True
+            return code
+
     def close(self) -> None:
         """Close pairing immediately."""
         with self._lock:

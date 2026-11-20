@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
+from storage import slugify
+
 
 # ---------------------------------------------------------------------------
 # Row dataclasses (read-only projections)
@@ -24,11 +26,17 @@ from typing import Generator, Optional
 class UserRow:
     id: str
     name: str
+    display_name: str
+    slug: str
     role: str  # owner | member | guest
     quota_bytes: int
-    is_active: bool
+    status: str  # active | disabled
     created_at: str
     organise_by_date: bool = False
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,7 @@ class DeviceRow:
     model: str
     slug: str
     created_at: str
+    last_seen_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -65,13 +74,16 @@ class TokenRow:
 @dataclass(frozen=True)
 class InviteRow:
     id: str
-    token_hash: str
-    role: str
-    quota_bytes: int
+    user_id: str
+    code_hash: str
     created_by: str
     expires_at: str
-    redeemed_by: Optional[str]
+    used_at: Optional[str]
     created_at: str
+    role: str = "member"
+    quota_bytes: int = 0
+    token_hash: Optional[str] = None
+    redeemed_by: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -175,13 +187,57 @@ class Database:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
         self._local = threading.local()
-        # Initialise schema on the calling thread's connection.
+        # Initialise schema and run migrations.
         with self._cursor() as cur:
             cur.executescript(_SCHEMA)
+            for col, definition in [
+                ("display_name", "TEXT"),
+                ("slug", "TEXT"),
+                ("status", "TEXT NOT NULL DEFAULT 'active'"),
+                ("organise_by_date", "INTEGER NOT NULL DEFAULT 0"),
+            ]:
+                try:
+                    cur.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
+
             try:
+                cur.execute("ALTER TABLE devices ADD COLUMN last_seen_at TEXT")
+            except Exception:
+                pass
+
+            try:
+                cur.execute("ALTER TABLE invites ADD COLUMN user_id TEXT")
+            except Exception:
+                pass
+            try:
+                cur.execute("ALTER TABLE invites ADD COLUMN code_hash TEXT")
+            except Exception:
+                pass
+            try:
+                cur.execute("ALTER TABLE invites ADD COLUMN used_at TEXT")
+            except Exception:
+                pass
+
+            # Backfill existing users
+            cur.execute("SELECT id, name, display_name, slug, is_active, status FROM users")
+            rows = cur.fetchall()
+            for r in rows:
+                d_name = r["display_name"] or r["name"]
+                slug = r["slug"]
+                if not slug:
+                    slug = slugify(d_name)
+                    cur.execute("SELECT COUNT(*) FROM users WHERE slug = ? AND id != ?", (slug, r["id"]))
+                    if cur.fetchone()[0] > 0:
+                        slug = f"{slug}-{r['id'][:4]}"
+                status = r["status"] if r["status"] else ("active" if r["is_active"] else "disabled")
                 cur.execute(
-                    "ALTER TABLE users ADD COLUMN organise_by_date INTEGER NOT NULL DEFAULT 0"
+                    "UPDATE users SET display_name = ?, slug = ?, status = ? WHERE id = ?",
+                    (d_name, slug, status, r["id"]),
                 )
+
+            try:
+                cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_slug ON users(slug)")
             except Exception:
                 pass
 
@@ -222,22 +278,49 @@ class Database:
 
     # -- users ---------------------------------------------------------------
 
+    def _row_to_user(self, row: sqlite3.Row) -> UserRow:
+        keys = row.keys()
+        d_name = row["display_name"] if "display_name" in keys and row["display_name"] else row["name"]
+        slug = row["slug"] if "slug" in keys and row["slug"] else slugify(d_name)
+        status = row["status"] if "status" in keys and row["status"] else ("active" if row["is_active"] else "disabled")
+        organise = bool(row["organise_by_date"]) if "organise_by_date" in keys else False
+        return UserRow(
+            id=row["id"],
+            name=d_name,
+            display_name=d_name,
+            slug=slug,
+            role=row["role"],
+            quota_bytes=row["quota_bytes"],
+            status=status,
+            created_at=row["created_at"],
+            organise_by_date=organise,
+        )
+
     def create_user(
         self,
         name: str,
-        role: str,
-        quota_bytes: int,
+        role: str = "member",
+        quota_bytes: int = 0,
         organise_by_date: bool = False,
+        display_name: Optional[str] = None,
+        slug: Optional[str] = None,
+        status: str = "active",
     ) -> UserRow:
         uid = f"usr_{uuid.uuid4().hex[:12]}"
         now = self._now()
+        disp_name = display_name or name
+        user_slug = slug or slugify(disp_name)
         with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users WHERE slug = ?", (user_slug,))
+            if cur.fetchone()[0] > 0:
+                user_slug = f"{user_slug}-{uuid.uuid4().hex[:4]}"
+
             cur.execute(
-                "INSERT INTO users (id, name, role, quota_bytes, is_active, created_at, organise_by_date) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uid, name, role, quota_bytes, 1, now, 1 if organise_by_date else 0),
+                "INSERT INTO users (id, name, display_name, slug, role, quota_bytes, status, is_active, created_at, organise_by_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, disp_name, disp_name, user_slug, role, quota_bytes, status, 1 if status == "active" else 0, now, 1 if organise_by_date else 0),
             )
-        return UserRow(uid, name, role, quota_bytes, True, now, organise_by_date)
+        return UserRow(uid, disp_name, disp_name, user_slug, role, quota_bytes, status, now, organise_by_date)
 
     def get_user(self, user_id: str) -> Optional[UserRow]:
         with self._cursor() as cur:
@@ -245,27 +328,28 @@ class Database:
             row = cur.fetchone()
             if row is None:
                 return None
-            organise = bool(row["organise_by_date"]) if "organise_by_date" in row.keys() else False
-            return UserRow(
-                row["id"], row["name"], row["role"],
-                row["quota_bytes"], bool(row["is_active"]), row["created_at"],
-                organise,
-            )
+            return self._row_to_user(row)
+
+    def get_user_by_slug(self, slug: str) -> Optional[UserRow]:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE slug = ?", (slug,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_user(row)
 
     def list_users(self) -> list[UserRow]:
         with self._cursor() as cur:
             cur.execute("SELECT * FROM users ORDER BY created_at")
-            return [
-                UserRow(
-                    r["id"], r["name"], r["role"],
-                    r["quota_bytes"], bool(r["is_active"]), r["created_at"],
-                    bool(r["organise_by_date"]) if "organise_by_date" in r.keys() else False,
-                )
-                for r in cur.fetchall()
-            ]
+            return [self._row_to_user(r) for r in cur.fetchall()]
+
+    def count_active_owners(self) -> int:
+        with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'owner' AND status = 'active'")
+            return cur.fetchone()[0]
 
     def update_user(self, user_id: str, **kwargs: object) -> None:
-        allowed = {"name", "role", "quota_bytes", "is_active", "organise_by_date"}
+        allowed = {"name", "display_name", "slug", "role", "quota_bytes", "status", "is_active", "organise_by_date"}
         parts: list[str] = []
         vals: list[object] = []
         for k, v in kwargs.items():
@@ -274,6 +358,22 @@ class Database:
             parts.append(f"{k} = ?")
             if k == "organise_by_date":
                 vals.append(1 if v else 0)
+            elif k == "status":
+                vals.append(v)
+                parts.append("is_active = ?")
+                vals.append(1 if v == "active" else 0)
+            elif k == "is_active":
+                vals.append(1 if v else 0)
+                parts.append("status = ?")
+                vals.append("active" if v else "disabled")
+            elif k == "display_name":
+                vals.append(v)
+                parts.append("name = ?")
+                vals.append(v)
+            elif k == "name":
+                vals.append(v)
+                parts.append("display_name = ?")
+                vals.append(v)
             else:
                 vals.append(v)
         if not parts:
@@ -289,9 +389,24 @@ class Database:
             cur.execute("DELETE FROM files WHERE user_id = ?", (user_id,))
             cur.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
             cur.execute("DELETE FROM devices WHERE user_id = ?", (user_id,))
+            cur.execute("DELETE FROM invites WHERE user_id = ? OR created_by = ?", (user_id, user_id))
+            cur.execute("DELETE FROM partial_uploads WHERE user_id = ?", (user_id,))
             cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
     # -- devices -------------------------------------------------------------
+
+    def _row_to_device(self, row: sqlite3.Row) -> DeviceRow:
+        keys = row.keys()
+        last_seen = row["last_seen_at"] if "last_seen_at" in keys else None
+        return DeviceRow(
+            id=row["id"],
+            user_id=row["user_id"],
+            name=row["name"],
+            model=row["model"],
+            slug=row["slug"],
+            created_at=row["created_at"],
+            last_seen_at=last_seen,
+        )
 
     def create_device(
         self, user_id: str, name: str, model: str, slug: str,
@@ -300,11 +415,11 @@ class Database:
         now = self._now()
         with self._cursor() as cur:
             cur.execute(
-                "INSERT INTO devices (id, user_id, name, model, slug, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (did, user_id, name, model, slug, now),
+                "INSERT INTO devices (id, user_id, name, model, slug, created_at, last_seen_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (did, user_id, name, model, slug, now, now),
             )
-        return DeviceRow(did, user_id, name, model, slug, now)
+        return DeviceRow(did, user_id, name, model, slug, now, now)
 
     def get_device(self, device_id: str) -> Optional[DeviceRow]:
         with self._cursor() as cur:
@@ -312,10 +427,7 @@ class Database:
             row = cur.fetchone()
             if row is None:
                 return None
-            return DeviceRow(
-                row["id"], row["user_id"], row["name"],
-                row["model"], row["slug"], row["created_at"],
-            )
+            return self._row_to_device(row)
 
     def list_devices(self, user_id: str) -> list[DeviceRow]:
         with self._cursor() as cur:
@@ -323,11 +435,35 @@ class Database:
                 "SELECT * FROM devices WHERE user_id = ? ORDER BY created_at",
                 (user_id,),
             )
-            return [
-                DeviceRow(r["id"], r["user_id"], r["name"],
-                          r["model"], r["slug"], r["created_at"])
-                for r in cur.fetchall()
-            ]
+            return [self._row_to_device(r) for r in cur.fetchall()]
+
+    def update_device_last_seen(self, device_id: str) -> None:
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE devices SET last_seen_at = ? WHERE id = ?",
+                (self._now(), device_id),
+            )
+
+    def delete_device(self, device_id: str) -> None:
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM tokens WHERE device_id = ?", (device_id,))
+            cur.execute("DELETE FROM devices WHERE id = ?", (device_id,))
+
+    def get_user_device_count(self, user_id: str) -> int:
+        with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM devices WHERE user_id = ?", (user_id,))
+            return cur.fetchone()[0]
+
+    def get_user_last_seen(self, user_id: str) -> Optional[str]:
+        with self._cursor() as cur:
+            cur.execute("SELECT MAX(last_seen_at) FROM devices WHERE user_id = ?", (user_id,))
+            row = cur.fetchone()
+            return row[0] if row and row[0] else None
+
+    def get_allocated_quota_total(self) -> int:
+        with self._cursor() as cur:
+            cur.execute("SELECT COALESCE(SUM(quota_bytes), 0) FROM users WHERE quota_bytes > 0 AND status = 'active'")
+            return cur.fetchone()[0]
 
     # -- tokens --------------------------------------------------------------
 
@@ -486,43 +622,90 @@ class Database:
 
     # -- invites -------------------------------------------------------------
 
+    def _row_to_invite(self, row: sqlite3.Row) -> InviteRow:
+        keys = row.keys()
+        u_id = row["user_id"] if "user_id" in keys and row["user_id"] else ""
+        c_hash = row["code_hash"] if "code_hash" in keys and row["code_hash"] else row["token_hash"]
+        used_at = row["used_at"] if "used_at" in keys else row["redeemed_by"]
+        role = row["role"] if "role" in keys else "member"
+        quota = row["quota_bytes"] if "quota_bytes" in keys else 0
+        return InviteRow(
+            id=row["id"],
+            user_id=u_id,
+            code_hash=c_hash,
+            created_by=row["created_by"],
+            expires_at=row["expires_at"],
+            used_at=used_at,
+            created_at=row["created_at"],
+            role=role,
+            quota_bytes=quota,
+            token_hash=c_hash,
+            redeemed_by=used_at,
+        )
+
     def create_invite(
         self,
-        token_hash: str,
-        role: str,
-        quota_bytes: int,
+        user_id: str,
+        code_hash: str,
         created_by: str,
         expires_at: str,
+        role: str = "member",
+        quota_bytes: int = 0,
     ) -> InviteRow:
         iid = f"inv_{uuid.uuid4().hex[:12]}"
         now = self._now()
         with self._cursor() as cur:
             cur.execute(
                 "INSERT INTO invites "
-                "(id, token_hash, role, quota_bytes, created_by, expires_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (iid, token_hash, role, quota_bytes, created_by, expires_at, now),
+                "(id, user_id, code_hash, token_hash, role, quota_bytes, created_by, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (iid, user_id, code_hash, code_hash, role, quota_bytes, created_by, expires_at, now),
             )
-        return InviteRow(iid, token_hash, role, quota_bytes, created_by,
-                         expires_at, None, now)
+        return InviteRow(
+            id=iid,
+            user_id=user_id,
+            code_hash=code_hash,
+            created_by=created_by,
+            expires_at=expires_at,
+            used_at=None,
+            created_at=now,
+            role=role,
+            quota_bytes=quota_bytes,
+            token_hash=code_hash,
+            redeemed_by=None,
+        )
 
-    def lookup_invite_by_hash(self, token_hash: str) -> Optional[InviteRow]:
+    def get_invite_by_hash(self, code_hash: str) -> Optional[InviteRow]:
         with self._cursor() as cur:
-            cur.execute("SELECT * FROM invites WHERE token_hash = ?", (token_hash,))
+            cur.execute(
+                "SELECT * FROM invites WHERE code_hash = ? OR token_hash = ? LIMIT 1",
+                (code_hash, code_hash),
+            )
             row = cur.fetchone()
             if row is None:
                 return None
-            return InviteRow(
-                row["id"], row["token_hash"], row["role"],
-                row["quota_bytes"], row["created_by"], row["expires_at"],
-                row["redeemed_by"], row["created_at"],
+            return self._row_to_invite(row)
+
+    def lookup_invite_by_hash(self, token_hash: str) -> Optional[InviteRow]:
+        return self.get_invite_by_hash(token_hash)
+
+    def mark_invite_used(self, invite_id: str) -> None:
+        now = self._now()
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE invites SET used_at = ?, redeemed_by = ? WHERE id = ?",
+                (now, now, invite_id),
             )
 
     def redeem_invite(self, invite_id: str, user_id: str) -> None:
+        self.mark_invite_used(invite_id)
+
+    def invalidate_user_invites(self, user_id: str) -> None:
+        now = self._now()
         with self._cursor() as cur:
             cur.execute(
-                "UPDATE invites SET redeemed_by = ? WHERE id = ?",
-                (user_id, invite_id),
+                "UPDATE invites SET used_at = 'revoked' WHERE user_id = ? AND used_at IS NULL",
+                (user_id,),
             )
 
     # -- audit log -----------------------------------------------------------

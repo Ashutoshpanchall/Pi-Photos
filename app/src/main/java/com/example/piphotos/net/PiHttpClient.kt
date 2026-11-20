@@ -439,3 +439,151 @@ data class CheckUploadResult(
 class OffsetMismatchException(val serverOffset: Long, message: String) : IOException(message)
 
 class HttpException(val code: Int, message: String) : IOException(message)
+
+// ---------------------------------------------------------------------------
+// Phase U1: Admin / User Manager models
+// ---------------------------------------------------------------------------
+
+/** Summary of a user as returned by GET /api/v1/admin/users. */
+data class AdminUser(
+    val id: String,
+    val name: String,
+    val displayName: String,
+    val slug: String,
+    val role: String,          // "owner" | "member"
+    val status: String,        // "active" | "disabled"
+    val quotaBytes: Long,      // 0 = unlimited
+    val usedBytes: Long,
+    val fileCount: Int,
+    val devicesCount: Int,
+    val lastSeenAt: String?
+)
+
+/** Result of POST /api/v1/admin/users — includes one-time invite code. */
+data class CreateUserResult(
+    val user: AdminUser,
+    val inviteCode: String,
+    val expiresAt: String,
+    val qrPayload: String
+)
+
+/** Request body for PATCH /api/v1/admin/users/{id}. All fields optional. */
+data class UpdateUserRequest(
+    val displayName: String? = null,
+    val quotaBytes: Long? = null,
+    val status: String? = null,   // "active" | "disabled"
+    val role: String? = null      // "owner" | "member"
+)
+
+/** Result of POST /api/v1/admin/users/{id}/invite. */
+data class InviteResult(
+    val inviteCode: String,
+    val expiresAt: String,
+    val qrPayload: String
+)
+
+/** A device as returned by GET /api/v1/admin/users/{id}/devices. */
+data class AdminDeviceSummary(
+    val id: String,
+    val name: String,
+    val model: String,
+    val slug: String,
+    val createdAt: String,
+    val lastSeenAt: String?
+)
+
+/** Result of POST /api/v1/admin/pairing/open. */
+data class OpenPairingResult(
+    val code: String,
+    val expiresInSeconds: Int
+)
+
+/** Per-user entry inside AdminOverview. */
+data class UserOverview(
+    val id: String,
+    val name: String,
+    val role: String,
+    val quotaBytes: Long,
+    val usedBytes: Long,
+    val fileCount: Int
+)
+
+/** Result of GET /api/v1/admin/overview. */
+data class AdminOverview(
+    val diskTotal: Long,
+    val diskFree: Long,
+    val diskReserved: Long,
+    val allocatedQuotaTotal: Long,
+    val overAllocated: Boolean,
+    val users: List<UserOverview>
+)
+
+// ---------------------------------------------------------------------------
+// JSON parsing helpers for admin models
+// ---------------------------------------------------------------------------
+
+internal fun JSONObject.toAdminUser(): AdminUser = AdminUser(
+    id = getString("id"),
+    name = optString("name", ""),
+    displayName = optString("display_name", optString("name", "")),
+    slug = optString("slug", ""),
+    role = optString("role", "member"),
+    status = optString("status", "active"),
+    quotaBytes = optLong("quota_bytes", 0L),
+    usedBytes = optLong("used_bytes", 0L),
+    fileCount = optInt("file_count", 0),
+    devicesCount = optInt("devices_count", 0),
+    lastSeenAt = optString("last_seen_at").ifEmpty { null }
+)
+
+internal fun JSONObject.toCreateUserResult(): CreateUserResult = CreateUserResult(
+    user = getJSONObject("user").toAdminUser(),
+    inviteCode = getString("invite_code"),
+    expiresAt = getString("expires_at"),
+    qrPayload = getString("qr_payload")
+)
+
+internal fun JSONObject.toInviteResult(): InviteResult = InviteResult(
+    inviteCode = getString("invite_code"),
+    expiresAt = getString("expires_at"),
+    qrPayload = getString("qr_payload")
+)
+
+internal fun JSONObject.toAdminDeviceSummary(): AdminDeviceSummary = AdminDeviceSummary(
+    id = getString("id"),
+    name = optString("name", ""),
+    model = optString("model", ""),
+    slug = optString("slug", ""),
+    createdAt = optString("created_at", ""),
+    lastSeenAt = optString("last_seen_at").ifEmpty { null }
+)
+
+internal fun JSONObject.toOpenPairingResult(): OpenPairingResult = OpenPairingResult(
+    code = getString("code"),
+    expiresInSeconds = optInt("expires_in_seconds", 600)
+)
+
+internal fun JSONObject.toAdminOverview(): AdminOverview {
+    val disk = getJSONObject("disk")
+    val usersArr = getJSONArray("users")
+    val users = (0 until usersArr.length()).map { i ->
+        usersArr.getJSONObject(i).let { u ->
+            UserOverview(
+                id = u.getString("id"),
+                name = u.optString("name", ""),
+                role = u.optString("role", "member"),
+                quotaBytes = u.optLong("quota_bytes", 0L),
+                usedBytes = u.optLong("used_bytes", 0L),
+                fileCount = u.optInt("file_count", 0)
+            )
+        }
+    }
+    return AdminOverview(
+        diskTotal = disk.getLong("total_bytes"),
+        diskFree = disk.getLong("free_bytes"),
+        diskReserved = disk.optLong("reserved_bytes", 0L),
+        allocatedQuotaTotal = optLong("allocated_quota_total", 0L),
+        overAllocated = optBoolean("over_allocated", false),
+        users = users
+    )
+}

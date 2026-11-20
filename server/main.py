@@ -15,8 +15,10 @@ import shutil
 import ssl
 import sys
 import uuid
+import secrets
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -33,7 +35,7 @@ from auth import (
     hash_token,
     resolve_bearer,
 )
-from database import Database
+from database import Database, UserRow
 from discovery import PiPhotosAdvertiser
 from models import (
     CheckUploadRequest,
@@ -49,6 +51,16 @@ from models import (
     StatusResponse,
     UploadResult,
     UserQuota,
+    UserRole,
+    AdminUserSummary,
+    CreateUserRequest,
+    CreateUserResponse,
+    UpdateUserRequest,
+    InviteResponse,
+    DeviceSummary,
+    OpenPairingResponse,
+    UserOverview,
+    AdminOverviewResponse,
 )
 from storage import StorageManager, slugify
 from tls_cert import generate_self_signed_cert, get_cert_fingerprint, get_local_ipv4_addresses
@@ -127,12 +139,31 @@ def _require_auth(authorization: Optional[str]) -> AuthIdentity:
             "error": "unauthorized",
             "message": "Missing or invalid authentication token",
         })
-    # Check the user is active
+    # Update device last_seen_at
+    db.update_device_last_seen(identity.device_id)
+
+    # Check user exists and active
     user = db.get_user(identity.user_id)
-    if user is None or not user.is_active:
+    if user is None:
         raise HTTPException(status_code=401, detail={
             "error": "unauthorized",
-            "message": "User account is suspended or deleted",
+            "message": "User not found",
+        })
+    if user.status == "disabled" or not user.is_active:
+        raise HTTPException(status_code=403, detail={
+            "error": "user_disabled",
+            "message": "User account is disabled",
+        })
+    return identity
+
+
+def _require_owner(authorization: Optional[str]) -> AuthIdentity:
+    identity = _require_auth(authorization)
+    user = db.get_user(identity.user_id)
+    if user is None or user.role != UserRole.OWNER:
+        raise HTTPException(status_code=403, detail={
+            "error": "forbidden",
+            "message": "Owner privileges required",
         })
     return identity
 
@@ -320,6 +351,22 @@ async def get_info() -> ServerInfo:
     )
 
 
+def _user_to_admin_summary(u: UserRow) -> AdminUserSummary:
+    return AdminUserSummary(
+        id=u.id,
+        name=u.display_name or u.name,
+        display_name=u.display_name or u.name,
+        slug=u.slug,
+        role=u.role,
+        status=u.status,
+        quota_bytes=u.quota_bytes,
+        used_bytes=db.user_storage_used(u.id),
+        file_count=db.user_file_count(u.id),
+        devices_count=db.get_user_device_count(u.id),
+        last_seen_at=db.get_user_last_seen(u.id),
+    )
+
+
 @app.post("/api/v1/pair")
 async def pair_device(req: PairRequest, request: Request) -> PairResponse:
     # IP Rate-Limiting
@@ -330,13 +377,60 @@ async def pair_device(req: PairRequest, request: Request) -> PairResponse:
             "message": "Too many pairing attempts from this IP. Please wait before retrying.",
         })
 
+    code_str = req.code.strip()
+    code_h = hash_token(code_str)
+
+    # 1. Check if the code matches an invite first
+    invite = db.get_invite_by_hash(code_h)
+    if invite is not None:
+        if invite.used_at is not None:
+            pairing.record_failed_attempt()
+            raise HTTPException(status_code=401, detail={
+                "error": "invite_used",
+                "message": "Invite code has already been used",
+            })
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if invite.expires_at < now_iso:
+            pairing.record_failed_attempt()
+            raise HTTPException(status_code=401, detail={
+                "error": "invite_expired",
+                "message": "Invite code has expired",
+            })
+
+        user = db.get_user(invite.user_id)
+        if user is None or user.status == "disabled" or not user.is_active:
+            raise HTTPException(status_code=403, detail={
+                "error": "user_disabled",
+                "message": "User account is disabled",
+            })
+
+        # Mark invite used and reset attempts
+        db.mark_invite_used(invite.id)
+        pairing.reset_attempts()
+
+        # Create device and token for invited user
+        device_slug = slugify(f"{req.device_name}")
+        device = db.create_device(user.id, req.device_name, req.device_model, device_slug)
+        token = create_bearer_token()
+        db.store_token(hash_token(token), user.id, device.id)
+        db.audit(user.id, "pair_device_invite", device.id,
+                 f"Paired device {req.device_name} ({req.device_model}) via invite")
+
+        return PairResponse(
+            token=token,
+            user_id=user.id,
+            device_id=device.id,
+        )
+
+    # 2. If not an invite, check owner pairing code
     if not pairing.is_open:
+        pairing.record_failed_attempt()
         raise HTTPException(status_code=409, detail={
             "error": "pairing_closed",
             "message": "Pairing is not currently available. Please request pairing from the server owner.",
         })
 
-    valid, reason = pairing.validate_code(req.code)
+    valid, reason = pairing.validate_code(code_str)
     if not valid:
         if reason == "too_many_attempts":
             raise HTTPException(status_code=401, detail={
@@ -355,7 +449,9 @@ async def pair_device(req: PairRequest, request: Request) -> PairResponse:
 
     # Find the owner user (first pair always goes to owner)
     users = db.list_users()
-    owner = next((u for u in users if u.role == "owner"), None)
+    owner = next((u for u in users if u.role == "owner" and u.status == "active"), None)
+    if owner is None:
+        owner = next((u for u in users if u.role == "owner"), None)
     if owner is None:
         raise HTTPException(status_code=500, detail={
             "error": "internal_error",
@@ -400,15 +496,22 @@ async def get_status(authorization: Optional[str] = Header(None)) -> StatusRespo
 
     used = db.user_storage_used(identity.user_id)
     file_count = db.user_file_count(identity.user_id)
-    free = max(0, user.quota_bytes - used)
+
+    if user.quota_bytes > 0:
+        free = max(0, user.quota_bytes - used)
+        usage_pct = (used / user.quota_bytes * 100)
+    else:
+        # Unlimited quota bound by disk space
+        free = max(0, disk_usage.free - reserved)
+        usage_pct = 0
 
     # Soft quota warnings
-    usage_pct = (used / user.quota_bytes * 100) if user.quota_bytes > 0 else 0
     warning = None
-    if usage_pct >= 90:
-        warning = "90%"
-    elif usage_pct >= 80:
-        warning = "80%"
+    if user.quota_bytes > 0:
+        if usage_pct >= 90:
+            warning = "90%"
+        elif usage_pct >= 80:
+            warning = "80%"
 
     return StatusResponse(
         disk=DiskInfo(
@@ -502,6 +605,16 @@ async def upload_file(
             "error": "bad_request", "message": "Invalid SHA-256 hash format",
         })
 
+    # Validate folder and name for path traversal
+    if ".." in folder or "/" in folder or "\\" in folder:
+        raise HTTPException(status_code=400, detail={
+            "error": "bad_request", "message": "Invalid folder name: path traversal characters are not allowed",
+        })
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail={
+            "error": "bad_request", "message": "Invalid filename: path traversal characters are not allowed",
+        })
+
     # Validate device belongs to user
     dev = db.get_device(device)
     if dev is None or dev.user_id != identity.user_id:
@@ -512,7 +625,7 @@ async def upload_file(
     user = db.get_user(identity.user_id)
     if user is None:
         raise HTTPException(status_code=401)
-    user_slug = user.name
+    user_slug = user.slug
 
     # Check if this content is already stored for this user (deduplication)
     # If so, create a duplicate reference record for this device/folder/name without second disk copy.
@@ -552,7 +665,7 @@ async def upload_file(
         async with user_locks[identity.user_id]:
             used = db.user_storage_used(identity.user_id)
             final_size = upload_offset + content_length if content_length > 0 else 0
-            if final_size > 0 and used + final_size > user.quota_bytes:
+            if user.quota_bytes > 0 and final_size > 0 and used + final_size > user.quota_bytes:
                 raise HTTPException(status_code=507, detail={
                     "error": "quota_exceeded",
                     "message": f"Upload would exceed your storage quota ({user.quota_bytes // (1024**3)} GB)",
@@ -598,7 +711,7 @@ async def upload_file(
                     chunk_len = len(chunk)
 
                     # Dynamic quota enforcement while streaming
-                    if used + total_bytes + chunk_len > user.quota_bytes:
+                    if user.quota_bytes > 0 and used + total_bytes + chunk_len > user.quota_bytes:
                         raise HTTPException(status_code=507, detail={
                             "error": "quota_exceeded",
                             "message": f"Upload exceeded user storage quota ({user.quota_bytes // (1024**3)} GB)",
@@ -697,6 +810,267 @@ async def get_device_folders(
         device_id=device_id,
         device_name=dev.name,
         folders=folders,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Owner-Only Admin Endpoints (/api/v1/admin/*)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/admin/users")
+async def list_admin_users(
+    authorization: Optional[str] = Header(None),
+) -> list[AdminUserSummary]:
+    _require_owner(authorization)
+    users = db.list_users()
+    return [_user_to_admin_summary(u) for u in users]
+
+
+@app.post("/api/v1/admin/users")
+async def create_admin_user(
+    req: CreateUserRequest,
+    authorization: Optional[str] = Header(None),
+) -> CreateUserResponse:
+    identity = _require_owner(authorization)
+    display_name = req.display_name.strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail={
+            "error": "bad_request",
+            "message": "Display name is required",
+        })
+
+    base_slug = slugify(display_name)
+    slug = base_slug
+    existing = db.get_user_by_slug(slug)
+    suffix = 2
+    while existing is not None:
+        slug = f"{base_slug}-{suffix}"
+        existing = db.get_user_by_slug(slug)
+        suffix += 1
+
+    new_user = db.create_user(
+        name=display_name,
+        role="member",
+        quota_bytes=req.quota_bytes,
+        display_name=display_name,
+        slug=slug,
+        status="active",
+    )
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_h = hash_token(code)
+    expires_dt = datetime.now(timezone.utc) + timedelta(hours=24)
+    expires_at = expires_dt.isoformat()
+    db.create_invite(new_user.id, code_h, created_by=identity.user_id, expires_at=expires_at, quota_bytes=req.quota_bytes)
+
+    ips = get_local_ipv4_addresses()
+    local_ip = ips[0] if ips else "127.0.0.1"
+    port = config["port"]
+    tls_fp = getattr(app.state, "tls_fingerprint", "")
+    qr_payload = f"piphotos://pair?host={local_ip}&port={port}&tls_fp={tls_fp}&code={code}"
+
+    return CreateUserResponse(
+        user=_user_to_admin_summary(new_user),
+        invite_code=code,
+        expires_at=expires_at,
+        qr_payload=qr_payload,
+    )
+
+
+@app.patch("/api/v1/admin/users/{user_id}")
+async def update_admin_user(
+    user_id: str,
+    req: UpdateUserRequest,
+    force: bool = Query(False),
+    authorization: Optional[str] = Header(None),
+) -> AdminUserSummary:
+    _require_owner(authorization)
+    target = db.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
+
+    # Check last active owner guard
+    active_owners = db.count_active_owners()
+    if target.role == "owner" and target.status == "active" and active_owners <= 1:
+        if req.status == "disabled":
+            raise HTTPException(status_code=400, detail={
+                "error": "last_owner_protected",
+                "message": "Cannot disable the last active owner",
+            })
+        if req.role is not None and req.role != "owner":
+            raise HTTPException(status_code=400, detail={
+                "error": "last_owner_protected",
+                "message": "Cannot demote the last active owner",
+            })
+
+    # Check quota below usage
+    if req.quota_bytes is not None and req.quota_bytes > 0:
+        used = db.user_storage_used(user_id)
+        if req.quota_bytes < used and not force:
+            raise HTTPException(status_code=400, detail={
+                "error": "quota_below_usage",
+                "message": f"Quota ({req.quota_bytes} bytes) cannot be set below current storage usage ({used} bytes). Pass force=true to override.",
+            })
+
+    kwargs = {}
+    if req.display_name is not None:
+        kwargs["display_name"] = req.display_name.strip()
+    if req.quota_bytes is not None:
+        kwargs["quota_bytes"] = req.quota_bytes
+    if req.status is not None:
+        kwargs["status"] = req.status
+    if req.role is not None:
+        kwargs["role"] = req.role
+
+    if kwargs:
+        db.update_user(user_id, **kwargs)
+
+    updated = db.get_user(user_id)
+    assert updated is not None
+    return _user_to_admin_summary(updated)
+
+
+@app.post("/api/v1/admin/users/{user_id}/invite")
+async def reissue_admin_user_invite(
+    user_id: str,
+    authorization: Optional[str] = Header(None),
+) -> InviteResponse:
+    identity = _require_owner(authorization)
+    target = db.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
+    if target.status == "disabled":
+        raise HTTPException(status_code=400, detail={"error": "user_disabled", "message": "Cannot issue invite for disabled user"})
+
+    # Invalidate existing unused invites
+    db.invalidate_user_invites(user_id)
+
+    # Issue new invite
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_h = hash_token(code)
+    expires_dt = datetime.now(timezone.utc) + timedelta(hours=24)
+    expires_at = expires_dt.isoformat()
+    db.create_invite(user_id, code_h, created_by=identity.user_id, expires_at=expires_at, quota_bytes=target.quota_bytes)
+
+    ips = get_local_ipv4_addresses()
+    local_ip = ips[0] if ips else "127.0.0.1"
+    port = config["port"]
+    tls_fp = getattr(app.state, "tls_fingerprint", "")
+    qr_payload = f"piphotos://pair?host={local_ip}&port={port}&tls_fp={tls_fp}&code={code}"
+
+    return InviteResponse(
+        invite_code=code,
+        expires_at=expires_at,
+        qr_payload=qr_payload,
+    )
+
+
+@app.delete("/api/v1/admin/users/{user_id}")
+async def delete_admin_user(
+    user_id: str,
+    delete_files: bool = Query(False),
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    _require_owner(authorization)
+    target = db.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
+
+    # Last active owner protection
+    if target.role == "owner" and target.status == "active" and db.count_active_owners() <= 1:
+        raise HTTPException(status_code=400, detail={
+            "error": "last_owner_protected",
+            "message": "Cannot delete the last active owner",
+        })
+
+    user_slug = target.slug
+    if delete_files:
+        storage.safe_delete_user_dir(user_slug)
+    else:
+        storage.archive_user_dir(user_slug)
+
+    db.delete_user(user_id)
+    return {"status": "deleted", "user_id": user_id, "files_deleted": delete_files}
+
+
+@app.get("/api/v1/admin/users/{user_id}/devices")
+async def list_admin_user_devices(
+    user_id: str,
+    authorization: Optional[str] = Header(None),
+) -> list[DeviceSummary]:
+    _require_owner(authorization)
+    target = db.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
+    devs = db.list_devices(user_id)
+    return [
+        DeviceSummary(
+            id=d.id,
+            name=d.name,
+            model=d.model,
+            slug=d.slug,
+            created_at=d.created_at,
+            last_seen_at=d.last_seen_at,
+        )
+        for d in devs
+    ]
+
+
+@app.delete("/api/v1/admin/devices/{device_id}")
+async def delete_admin_device(
+    device_id: str,
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    _require_owner(authorization)
+    dev = db.get_device(device_id)
+    if dev is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Device not found"})
+    db.delete_device(device_id)
+    return {"status": "revoked", "device_id": device_id}
+
+
+@app.post("/api/v1/admin/pairing/open")
+async def open_admin_pairing(
+    authorization: Optional[str] = Header(None),
+) -> OpenPairingResponse:
+    _require_owner(authorization)
+    code = pairing.open_pairing(duration_minutes=10)
+    return OpenPairingResponse(code=code, expires_in_seconds=600)
+
+
+@app.get("/api/v1/admin/overview")
+async def get_admin_overview(
+    authorization: Optional[str] = Header(None),
+) -> AdminOverviewResponse:
+    _require_owner(authorization)
+    disk_usage = shutil.disk_usage(storage.root)
+    reserved = int(disk_usage.total * get_disk_reserve_fraction())
+
+    users = db.list_users()
+    allocated = db.get_allocated_quota_total()
+    over_allocated = allocated > disk_usage.total
+
+    user_overviews = [
+        UserOverview(
+            id=u.id,
+            name=u.display_name or u.name,
+            role=u.role,
+            quota_bytes=u.quota_bytes,
+            used_bytes=db.user_storage_used(u.id),
+            file_count=db.user_file_count(u.id),
+        )
+        for u in users
+    ]
+
+    return AdminOverviewResponse(
+        disk=DiskInfo(
+            total_bytes=disk_usage.total,
+            free_bytes=disk_usage.free,
+            reserved_bytes=reserved,
+        ),
+        allocated_quota_total=allocated,
+        over_allocated=over_allocated,
+        users=user_overviews,
     )
 
 

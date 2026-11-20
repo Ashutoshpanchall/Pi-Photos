@@ -601,3 +601,351 @@ class TestAPI:
         target_path = storage.root / "users" / slugify(user.name) / "devices" / "phone" / "Camera" / "2026" / "01" / "img.jpg"
         assert target_path.exists()
         assert int(target_path.stat().st_mtime) == taken_ts
+
+
+class TestUserManager:
+    def setup_method(self):
+        self.tmp = tempfile.mkdtemp()
+        os.environ["PIPHOTOS_STORAGE"] = os.path.join(self.tmp, "storage")
+        os.environ["PIPHOTOS_DB"] = os.path.join(self.tmp, "test.db")
+        os.environ["PIPHOTOS_CERTS"] = os.path.join(self.tmp, "certs")
+        os.environ["PIPHOTOS_CONFIG"] = os.path.join(self.tmp, "nonexistent.json")
+        os.environ["PIPHOTOS_NO_MDNS"] = "1"
+        os.environ["PIPHOTOS_NO_QR"] = "1"
+        os.environ["PIPHOTOS_DISK_RESERVE_FRACTION"] = "0.0"
+
+        from fastapi.testclient import TestClient
+        from main import app, ip_limiter
+        ip_limiter._requests.clear()
+        self._tc = TestClient(app)
+        self.client = self._tc.__enter__()
+
+    def teardown_method(self):
+        self._tc.__exit__(None, None, None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _pair_owner(self):
+        from main import pairing
+        code = pairing.generate_code()
+        resp = self.client.post("/api/v1/pair", json={
+            "code": code,
+            "device_name": "Owner Phone",
+            "device_model": "Pixel",
+        })
+        assert resp.status_code == 200, resp.text
+        token = resp.json()["token"]
+        return {"Authorization": f"Bearer {token}"}, resp.json()["user_id"], resp.json()["device_id"]
+
+    def test_owner_creates_member_invite_and_pair(self):
+        owner_headers, owner_id, _ = self._pair_owner()
+
+        # 1. Create member
+        resp = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "Bob Member",
+            "quota_bytes": 10000,
+        })
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["user"]["display_name"] == "Bob Member"
+        assert data["user"]["role"] == "member"
+        invite_code = data["invite_code"]
+        assert len(invite_code) == 6
+        assert "piphotos://pair" in data["qr_payload"]
+        bob_id = data["user"]["id"]
+
+        # 2. Bob pairs using invite code
+        bob_pair = self.client.post("/api/v1/pair", json={
+            "code": invite_code,
+            "device_name": "Bob Phone",
+            "device_model": "Galaxy",
+        })
+        assert bob_pair.status_code == 200, bob_pair.text
+        bob_token = bob_pair.json()["token"]
+        bob_dev = bob_pair.json()["device_id"]
+        assert bob_pair.json()["user_id"] == bob_id
+        bob_headers = {"Authorization": f"Bearer {bob_token}"}
+
+        # 3. Bob uploads a file
+        content = b"Bob secret photo"
+        sha = hashlib.sha256(content).hexdigest()
+        up_resp = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": bob_dev, "folder": "Camera", "name": "bob.jpg"},
+            headers={**bob_headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert up_resp.status_code == 200, up_resp.text
+
+        # 4. Check user list shows Bob with used_bytes and 1 device
+        users_resp = self.client.get("/api/v1/admin/users", headers=owner_headers)
+        assert users_resp.status_code == 200
+        users = {u["id"]: u for u in users_resp.json()}
+        assert users[bob_id]["used_bytes"] == len(content)
+        assert users[bob_id]["devices_count"] == 1
+
+        # 5. Non-owner cannot access admin endpoints
+        non_owner = self.client.get("/api/v1/admin/users", headers=bob_headers)
+        assert non_owner.status_code == 403
+
+    def test_cross_user_isolation(self):
+        owner_headers, owner_id, owner_dev = self._pair_owner()
+
+        # Create member Alice
+        create_resp = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "Alice",
+            "quota_bytes": 100000,
+        })
+        invite = create_resp.json()["invite_code"]
+        pair_resp = self.client.post("/api/v1/pair", json={
+            "code": invite,
+            "device_name": "Alice Phone",
+            "device_model": "iPhone",
+        })
+        alice_headers = {"Authorization": f"Bearer {pair_resp.json()['token']}"}
+        alice_dev = pair_resp.json()["device_id"]
+
+        # Alice attempts to access Owner's device folders -> 404
+        cross_resp = self.client.get(f"/api/v1/devices/{owner_dev}/folders", headers=alice_headers)
+        assert cross_resp.status_code == 404
+
+        # Alice attempts upload to Owner's device -> 403
+        content = b"Hacked content"
+        sha = hashlib.sha256(content).hexdigest()
+        hack_resp = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": owner_dev, "folder": "Camera", "name": "bad.jpg"},
+            headers={**alice_headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert hack_resp.status_code == 403
+
+        # Path traversal with ../ is rejected
+        trav_resp = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": alice_dev, "folder": "../../../etc", "name": "bad.jpg"},
+            headers={**alice_headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert trav_resp.status_code in (400, 500)
+
+    def test_quota_soft_warnings_and_hard_limit(self):
+        owner_headers, _, _ = self._pair_owner()
+
+        # Create user with 100 byte quota
+        create_resp = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "QuotaUser",
+            "quota_bytes": 100,
+        })
+        user_id = create_resp.json()["user"]["id"]
+        invite = create_resp.json()["invite_code"]
+
+        pair = self.client.post("/api/v1/pair", json={
+            "code": invite,
+            "device_name": "Device",
+            "device_model": "Model",
+        }).json()
+        headers = {"Authorization": f"Bearer {pair['token']}"}
+        dev_id = pair["device_id"]
+
+        # Upload 85 bytes -> 85% usage (warning: "80%")
+        content85 = b"A" * 85
+        sha85 = hashlib.sha256(content85).hexdigest()
+        r85 = self.client.put(
+            f"/api/v1/upload/{sha85}",
+            params={"device": dev_id, "folder": "Test", "name": "f1.bin"},
+            headers={**headers, "Content-Length": "85"},
+            content=content85,
+        )
+        assert r85.status_code == 200
+        st85 = self.client.get("/api/v1/status", headers=headers).json()
+        assert st85["user"]["soft_quota_warning"] == "80%"
+
+        # Attempt upload of 20 more bytes -> 105 total > 100 bytes -> 507
+        content20 = b"B" * 20
+        sha20 = hashlib.sha256(content20).hexdigest()
+        r20 = self.client.put(
+            f"/api/v1/upload/{sha20}",
+            params={"device": dev_id, "folder": "Test", "name": "f2.bin"},
+            headers={**headers, "Content-Length": "20"},
+            content=content20,
+        )
+        assert r20.status_code == 507
+        assert r20.json()["detail"]["error"] == "quota_exceeded"
+
+        # Owner attempts to lower quota below 85 without force -> 400
+        lower = self.client.patch(f"/api/v1/admin/users/{user_id}", headers=owner_headers, json={
+            "quota_bytes": 50,
+        })
+        assert lower.status_code == 400
+        assert lower.json()["detail"]["error"] == "quota_below_usage"
+
+        # With force=True, lower quota is accepted
+        forced = self.client.patch(f"/api/v1/admin/users/{user_id}?force=true", headers=owner_headers, json={
+            "quota_bytes": 50,
+        })
+        assert forced.status_code == 200
+        assert forced.json()["quota_bytes"] == 50
+
+    def test_disabled_user_and_revoked_device(self):
+        owner_headers, _, _ = self._pair_owner()
+
+        create_resp = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "Dave",
+            "quota_bytes": 1000,
+        })
+        user_id = create_resp.json()["user"]["id"]
+        invite = create_resp.json()["invite_code"]
+
+        pair = self.client.post("/api/v1/pair", json={
+            "code": invite,
+            "device_name": "Dave Device",
+            "device_model": "Phone",
+        }).json()
+        headers = {"Authorization": f"Bearer {pair['token']}"}
+        dev_id = pair["device_id"]
+
+        # Dave is active: status works
+        assert self.client.get("/api/v1/status", headers=headers).status_code == 200
+
+        # Owner disables Dave
+        dis = self.client.patch(f"/api/v1/admin/users/{user_id}", headers=owner_headers, json={
+            "status": "disabled",
+        })
+        assert dis.status_code == 200
+
+        # Dave gets 403 user_disabled
+        st = self.client.get("/api/v1/status", headers=headers)
+        assert st.status_code == 403
+        assert st.json()["detail"]["error"] == "user_disabled"
+
+        # Owner re-enables Dave
+        self.client.patch(f"/api/v1/admin/users/{user_id}", headers=owner_headers, json={
+            "status": "active",
+        })
+        assert self.client.get("/api/v1/status", headers=headers).status_code == 200
+
+        # Owner revokes Dave's device
+        del_dev = self.client.delete(f"/api/v1/admin/devices/{dev_id}", headers=owner_headers)
+        assert del_dev.status_code == 200
+
+        # Dave's token is now revoked (401)
+        assert self.client.get("/api/v1/status", headers=headers).status_code == 401
+
+    def test_last_owner_protection(self):
+        owner_headers, owner_id, _ = self._pair_owner()
+
+        # Cannot disable last owner
+        d_resp = self.client.patch(f"/api/v1/admin/users/{owner_id}", headers=owner_headers, json={
+            "status": "disabled",
+        })
+        assert d_resp.status_code == 400
+        assert d_resp.json()["detail"]["error"] == "last_owner_protected"
+
+        # Cannot demote last owner
+        dem_resp = self.client.patch(f"/api/v1/admin/users/{owner_id}", headers=owner_headers, json={
+            "role": "member",
+        })
+        assert dem_resp.status_code == 400
+        assert dem_resp.json()["detail"]["error"] == "last_owner_protected"
+
+        # Cannot delete last owner
+        del_resp = self.client.delete(f"/api/v1/admin/users/{owner_id}", headers=owner_headers)
+        assert del_resp.status_code == 400
+        assert del_resp.json()["detail"]["error"] == "last_owner_protected"
+
+    def test_invite_single_use_and_reissue(self):
+        owner_headers, _, _ = self._pair_owner()
+
+        create_resp = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "Eve",
+            "quota_bytes": 1000,
+        })
+        user_id = create_resp.json()["user"]["id"]
+        invite1 = create_resp.json()["invite_code"]
+
+        # First use succeeds
+        p1 = self.client.post("/api/v1/pair", json={
+            "code": invite1,
+            "device_name": "Eve Phone",
+            "device_model": "Phone",
+        })
+        assert p1.status_code == 200
+
+        # Second use of same invite fails with invite_used
+        p2 = self.client.post("/api/v1/pair", json={
+            "code": invite1,
+            "device_name": "Eve Tablet",
+            "device_model": "Tablet",
+        })
+        assert p2.status_code == 401
+        assert p2.json()["detail"]["error"] == "invite_used"
+
+        # Owner re-issues invite
+        reissue = self.client.post(f"/api/v1/admin/users/{user_id}/invite", headers=owner_headers)
+        assert reissue.status_code == 200
+        invite2 = reissue.json()["invite_code"]
+        assert invite2 != invite1
+
+        # Re-issued invite succeeds for second device
+        p3 = self.client.post("/api/v1/pair", json={
+            "code": invite2,
+            "device_name": "Eve Tablet",
+            "device_model": "Tablet",
+        })
+        assert p3.status_code == 200
+
+    def test_delete_user_archive_vs_purge(self):
+        owner_headers, _, _ = self._pair_owner()
+
+        # User 1: delete with delete_files=False (archive)
+        c1 = self.client.post("/api/v1/admin/users", headers=owner_headers, json={"display_name": "KeepFiles"}).json()
+        u1_id = c1["user"]["id"]
+        p1 = self.client.post("/api/v1/pair", json={"code": c1["invite_code"], "device_name": "D1", "device_model": "M"}).json()
+        h1 = {"Authorization": f"Bearer {p1['token']}"}
+        content = b"important user data"
+        sha = hashlib.sha256(content).hexdigest()
+        self.client.put(f"/api/v1/upload/{sha}", params={"device": p1["device_id"], "folder": "Camera", "name": "f.jpg"}, headers={**h1, "Content-Length": str(len(content))}, content=content)
+
+        del1 = self.client.delete(f"/api/v1/admin/users/{u1_id}?delete_files=false", headers=owner_headers)
+        assert del1.status_code == 200
+
+        # Check archived in _removed/
+        from main import storage
+        removed_dirs = list((storage.root / "_removed").glob("keepfiles-*"))
+        assert len(removed_dirs) == 1
+
+        # User 2: delete with delete_files=True (purge)
+        c2 = self.client.post("/api/v1/admin/users", headers=owner_headers, json={"display_name": "PurgeUser"}).json()
+        u2_id = c2["user"]["id"]
+        p2 = self.client.post("/api/v1/pair", json={"code": c2["invite_code"], "device_name": "D2", "device_model": "M"}).json()
+        h2 = {"Authorization": f"Bearer {p2['token']}"}
+        self.client.put(f"/api/v1/upload/{sha}", params={"device": p2["device_id"], "folder": "Camera", "name": "f.jpg"}, headers={**h2, "Content-Length": str(len(content))}, content=content)
+
+        del2 = self.client.delete(f"/api/v1/admin/users/{u2_id}?delete_files=true", headers=owner_headers)
+        assert del2.status_code == 200
+        assert not (storage.root / "users" / "purgeuser").exists()
+
+    def test_admin_pairing_open_and_overview(self):
+        owner_headers, _, _ = self._pair_owner()
+
+        # Open pairing window via admin endpoint
+        open_resp = self.client.post("/api/v1/admin/pairing/open", headers=owner_headers)
+        assert open_resp.status_code == 200
+        new_code = open_resp.json()["code"]
+        assert len(new_code) == 6
+
+        # Pairing with new code works
+        p = self.client.post("/api/v1/pair", json={
+            "code": new_code,
+            "device_name": "Second Owner Device",
+            "device_model": "MacBook",
+        })
+        assert p.status_code == 200
+
+        # Overview endpoint
+        overview = self.client.get("/api/v1/admin/overview", headers=owner_headers)
+        assert overview.status_code == 200
+        od = overview.json()
+        assert "disk" in od
+        assert "allocated_quota_total" in od
+        assert len(od["users"]) >= 1

@@ -83,14 +83,17 @@ Returns server identity and pairing availability.
 
 **Auth:** None (protected by 6-digit code and IP rate-limiting)
 
-Pairs a device with the server.
+Pairs a device with the server. Accepts **two types of codes**:
+
+1. **Owner startup code** — printed in the server console on startup, pairs the device to the owner account.
+2. **Member invite code** — issued by the owner via `POST /api/v1/admin/users` or `POST /api/v1/admin/users/{id}/invite`, ties the device to that specific member account.
 
 **Rules:**
-- 6-digit code displayed in server console; expires after 10 minutes.
+- 6-digit code displayed in server console; owner code expires after 10 minutes.
+- Invite codes expire after 24 hours and are single-use.
 - Rate-limited per client IP (HTTP 429 if exceeded).
 - Invalidation after 5 failed code attempts (HTTP 401 `code_invalidated`).
-- Closes immediately upon 1 successful pairing (does NOT auto-generate a new code).
-  Pairing opens only upon explicit owner action.
+- Owner pairing closes immediately upon 1 successful pairing. Opens only upon explicit owner action (`POST /api/v1/admin/pairing/open`).
 
 **Request:**
 ```json
@@ -110,13 +113,15 @@ Pairs a device with the server.
 }
 ```
 
-**Error 401:** Invalid code or code invalidated due to 5 failed attempts.
-```json
-{
-  "error": "invalid_code",
-  "message": "Pairing code is invalid or has expired"
-}
-```
+**Error 401 `invalid_code`:** Invalid code or expired.
+
+**Error 401 `invite_expired`:** Invite code is past its expiry time.
+
+**Error 401 `invite_used`:** Invite code has already been redeemed.
+
+**Error 401 `code_invalidated`:** Code invalidated due to 5 failed attempts.
+
+**Error 403 `user_disabled`:** The user linked to this invite is disabled.
 
 **Error 409:** Pairing is closed.
 
@@ -334,3 +339,190 @@ File modification time (`mtime`) is set to `date_taken` when provided.
 | 429  | `rate_limited`         | Too many requests from this IP             |
 | 507  | `quota_exceeded`       | User quota or disk reserve exceeded        |
 | 500  | `internal_error`       | Unexpected server error                    |
+
+| 401  | `invite_expired`       | Invite code is past its expiry time         |
+| 401  | `invite_used`          | Invite code has already been redeemed       |
+| 403  | `user_disabled`        | User account has been disabled              |
+| 400  | `quota_below_usage`    | Cannot set quota below current usage        |
+| 400  | `last_owner_protected` | Cannot disable, delete, or demote last owner|
+
+---
+
+## Admin Endpoints (Owner Only) — Phase U1
+
+All endpoints under `/api/v1/admin/*` require owner-role authentication.
+A non-owner token receives `403 {"error": "forbidden"}`.
+
+### GET /api/v1/admin/users
+
+List all users with usage statistics.
+
+**Response 200:**
+```json
+[
+  {
+    "id": "usr_abc123",
+    "name": "Owner",
+    "display_name": "Owner",
+    "slug": "owner",
+    "role": "owner",
+    "status": "active",
+    "quota_bytes": 0,
+    "used_bytes": 10737418240,
+    "file_count": 842,
+    "devices_count": 2,
+    "last_seen_at": "2026-11-20T07:00:00+00:00"
+  }
+]
+```
+
+`quota_bytes` of `0` means unlimited (bound only by disk reserve).
+
+### POST /api/v1/admin/users
+
+Create a new member and issue a one-time invite code.
+
+**Request:**
+```json
+{
+  "display_name": "Alice",
+  "quota_bytes": 107374182400
+}
+```
+
+**Response 200:**
+```json
+{
+  "user": { "id": "usr_xyz", "display_name": "Alice", "role": "member", "status": "active" },
+  "invite_code": "482913",
+  "expires_at": "2026-11-21T07:00:00+00:00",
+  "qr_payload": "piphotos://pair?host=192.168.1.42&port=8443&tls_fp=AB:CD:...&code=482913"
+}
+```
+
+The invite code is 6 digits, expires in 24 hours, stored hashed, and is single-use.
+
+### PATCH /api/v1/admin/users/{id}
+
+Update a user's display name, quota, status, or role.
+
+**Query:** `?force=true` — override quota below usage protection.
+
+**Request (all fields optional):**
+```json
+{
+  "display_name": "Alice Smith",
+  "quota_bytes": 53687091200,
+  "status": "disabled",
+  "role": "owner"
+}
+```
+
+**Rules:**
+- Cannot disable, delete, or demote the last active owner.
+- Cannot set `quota_bytes` below current `used_bytes` without `?force=true`.
+
+### POST /api/v1/admin/users/{id}/invite
+
+Re-issue an invite code for an existing member (invalidates previous unused invites).
+
+**Response 200:**
+```json
+{
+  "invite_code": "391827",
+  "expires_at": "2026-11-21T07:00:00+00:00",
+  "qr_payload": "piphotos://pair?host=192.168.1.42&port=8443&tls_fp=AB:CD:...&code=391827"
+}
+```
+
+### DELETE /api/v1/admin/users/{id}
+
+Delete a user. The last active owner cannot be deleted.
+
+**Query:** `?delete_files=true` — permanently delete `users/<slug>/` from disk.
+Without this flag (default `false`), files are archived to `<storage_root>/_removed/<slug>-<timestamp>/`.
+
+**Response 200:**
+```json
+{ "status": "deleted", "user_id": "usr_xyz", "files_deleted": false }
+```
+
+### GET /api/v1/admin/users/{id}/devices
+
+List all devices paired to a user.
+
+**Response 200:**
+```json
+[
+  {
+    "id": "dev_abc",
+    "name": "Pixel 9",
+    "model": "google pixel 9",
+    "slug": "pixel-9",
+    "created_at": "2026-11-01T10:00:00+00:00",
+    "last_seen_at": "2026-11-20T07:00:00+00:00"
+  }
+]
+```
+
+### DELETE /api/v1/admin/devices/{device_id}
+
+Revoke a device token. The device immediately gets `401` on its next request.
+
+### POST /api/v1/admin/pairing/open
+
+Open a new owner pairing window without restarting the server. Generates a fresh 6-digit code valid for 10 minutes.
+
+**Response 200:**
+```json
+{ "code": "183729", "expires_in_seconds": 600 }
+```
+
+### GET /api/v1/admin/overview
+
+Disk and per-user quota summary.
+
+**Response 200:**
+```json
+{
+  "disk": {
+    "total_bytes": 500107862016,
+    "free_bytes": 234881024000,
+    "reserved_bytes": 50010786201
+  },
+  "allocated_quota_total": 322122547200,
+  "over_allocated": false,
+  "users": [
+    {
+      "id": "usr_abc",
+      "name": "Owner",
+      "role": "owner",
+      "quota_bytes": 0,
+      "used_bytes": 10737418240,
+      "file_count": 842
+    }
+  ]
+}
+```
+
+`over_allocated` is `true` when the sum of all users' non-zero quotas exceeds total disk space.
+
+---
+
+## User Data Isolation
+
+- Each user's files live exclusively in `<storage_root>/users/<slug>/`.
+- Deduplication is **per-user only** — the same content uploaded by two different users is stored twice.
+- A device token can only access its own user's files. Cross-user token swap returns 403/404.
+- Path traversal in `folder` or `name` query params is rejected with 400.
+
+## Quota Rules
+
+| Condition                            | Behaviour                             |
+|--------------------------------------|---------------------------------------|
+| `quota_bytes == 0`                   | Unlimited (but disk reserve enforced) |
+| Used ≥ 80% of quota                  | `soft_quota_warning: "80%"` in status |
+| Used ≥ 90% of quota                  | `soft_quota_warning: "90%"` in status |
+| Upload would exceed quota            | 507 `quota_exceeded` (pre-flight)     |
+| Upload exceeds quota mid-stream      | 507 `quota_exceeded` (stream halted)  |
+| Upload would breach 10% disk reserve | 507 `quota_exceeded`                  |
