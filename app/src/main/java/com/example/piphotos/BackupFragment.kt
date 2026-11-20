@@ -28,6 +28,9 @@ import com.example.piphotos.sync.ConnectionState
 import com.example.piphotos.sync.ConnectionStateMonitor
 import com.example.piphotos.sync.DevicePairingBottomSheet
 import com.example.piphotos.sync.MediaSyncWorker
+import com.example.piphotos.sync.QuotaState
+import com.example.piphotos.sync.QuotaStateManager
+import com.example.piphotos.sync.QuotaStatus
 import com.example.piphotos.sync.SyncLedgerState
 import com.example.piphotos.sync.SyncNodePreferences
 import com.example.piphotos.sync.SyncRepository
@@ -129,40 +132,57 @@ class BackupFragment : Fragment() {
             Toast.makeText(ctx, "Retrying all failed files...", Toast.LENGTH_SHORT).show()
         }
 
+        binding.btnErrorSecondaryAction.setOnClickListener {
+            val ctx = requireContext()
+            val quota = SyncRepository.getInstance(ctx).quotaState.value
+            val sName = SyncNodePreferences.getServerName(ctx)
+            val dName = SyncNodePreferences.getDisplayName(ctx)
+            val shareText = QuotaStateManager.formatShareMessage(quota, sName, dName)
+            val sendIntent = Intent().apply {
+                action = Intent.ACTION_SEND
+                putExtra(Intent.EXTRA_TEXT, shareText)
+                type = "text/plain"
+            }
+            startActivity(Intent.createChooser(sendIntent, "Ask Owner for More Storage"))
+        }
+
         binding.btnErrorAction.setOnClickListener {
             val ctx = requireContext()
-            val state = SyncRepository.getInstance(ctx).syncState.value
-            val err = state.lastError ?: ""
-            if (err.contains("quota_exceeded") || err.contains("Vault is full") || err.contains("Storage Limit Reached")) {
-                val quotaBytes = SyncNodePreferences.getQuotaBytes(ctx)
-                val usedBytes = SyncNodePreferences.getUsedBytes(ctx)
-                val quotaMsg = if (quotaBytes <= 0L) {
-                    "Vault physical storage is full. Please free up space on the storage node."
-                } else {
-                    val usedGb = "%.2f".format(usedBytes / (1024.0 * 1024.0 * 1024.0))
-                    val quotaGb = "%.2f".format(quotaBytes / (1024.0 * 1024.0 * 1024.0))
-                    "You have used $usedGb GB of your $quotaGb GB quota. Please contact the vault owner to increase your quota."
+            val quota = SyncRepository.getInstance(ctx).quotaState.value
+            when (quota.status) {
+                is QuotaStatus.DeviceRevoked -> {
+                    SyncNodePreferences.clearPairedNode(ctx)
+                    DevicePairingBottomSheet {
+                        updateBackupUiState()
+                    }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
                 }
-                androidx.appcompat.app.AlertDialog.Builder(ctx)
-                    .setTitle("Storage Limit Reached")
-                    .setMessage(quotaMsg)
-                    .setPositiveButton("OK", null)
-                    .show()
-                return@setOnClickListener
-            }
-
-            if (SyncNodePreferences.isPaired(ctx)) {
-                SyncRepository.getInstance(ctx).retryAllFailed()
-                MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
-                Toast.makeText(ctx, "Retrying media sync...", Toast.LENGTH_SHORT).show()
-            } else {
-                DevicePairingBottomSheet {
-                    updateBackupUiState()
-                    viewLifecycleOwner.lifecycleScope.launch {
-                        connectionMonitor?.checkNow()
+                is QuotaStatus.Warn80, is QuotaStatus.Warn90 -> {
+                    val sName = SyncNodePreferences.getServerName(ctx)
+                    val dName = SyncNodePreferences.getDisplayName(ctx)
+                    val shareText = QuotaStateManager.formatShareMessage(quota, sName, dName)
+                    val sendIntent = Intent().apply {
+                        action = Intent.ACTION_SEND
+                        putExtra(Intent.EXTRA_TEXT, shareText)
+                        type = "text/plain"
                     }
-                }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
+                    startActivity(Intent.createChooser(sendIntent, "Ask Owner for More Storage"))
+                }
+                else -> {
+                    if (SyncNodePreferences.isPaired(ctx)) {
+                        SyncRepository.getInstance(ctx).retryAllFailed()
+                        MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
+                        Toast.makeText(ctx, "Retrying media sync...", Toast.LENGTH_SHORT).show()
+                    } else {
+                        DevicePairingBottomSheet {
+                            updateBackupUiState()
+                        }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
+                    }
+                }
             }
+        }
+
+        binding.btnViewServerFiles.setOnClickListener {
+            startActivity(Intent(requireContext(), ServerFilesActivity::class.java))
         }
 
         binding.btnManageFolders.setOnClickListener {
@@ -272,6 +292,7 @@ class BackupFragment : Fragment() {
         binding.cardLocalOnly.visibility = if (isPaired) View.GONE else View.VISIBLE
         binding.cardPiOptIn.visibility = if (isPaired) View.GONE else View.VISIBLE
         binding.cardBackupProgress.visibility = if (isPaired) View.VISIBLE else View.GONE
+        binding.cardServerFiles.visibility = if (isPaired) View.VISIBLE else View.GONE
         binding.headerServerFolders.visibility = if (isPaired) View.VISIBLE else View.GONE
         binding.rvFoldersOnServer.visibility = if (isPaired) View.VISIBLE else View.GONE
 
@@ -295,6 +316,13 @@ class BackupFragment : Fragment() {
                 refreshQueue()
             }
         }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            syncRepo.quotaState.collectLatest {
+                val state = syncRepo.syncState.value
+                renderSyncState(state)
+            }
+        }
     }
 
     private fun renderSyncState(state: SyncLedgerState) {
@@ -306,28 +334,63 @@ class BackupFragment : Fragment() {
         binding.switchCharging.isEnabled = !state.isSyncing
         binding.switchVideos.isEnabled = !state.isSyncing
 
-        // Update progress ring
-        binding.cpiBackupProgress.progress = state.percentComplete
+        val quota = SyncRepository.getInstance(context).quotaState.value
+        val usedBytes = quota.usedBytes
+        val quotaBytes = quota.quotaBytes
+        val pct = if (quotaBytes > 0) ((usedBytes.toDouble() / quotaBytes.toDouble()) * 100).toInt().coerceIn(0, 100) else 0
 
-        // Byte count & last backup time
-        val lastSync = SyncNodePreferences.getLastSyncTimestamp(context)
-        val lastSyncText = if (lastSync > 0L) {
-            "Last backup: " + DateUtils.getRelativeTimeSpanString(lastSync, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
-        } else {
-            "Last backup: Never"
-        }
-        binding.tvLastBackupTime.text = lastSyncText
-
-        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
-            val db = AppDatabase.getInstance(context)
-            val summary = db.syncLedgerDao().summary
-            withContext(Dispatchers.Main) {
-                if (_binding == null) return@withContext
-                if (summary != null) {
-                    val uploadedStr = formatBytes(summary.uploadedBytes)
-                    val pendingBytes = (summary.totalBytes - summary.uploadedBytes).coerceAtLeast(0L)
-                    val pendingStr = formatBytes(pendingBytes)
-                    binding.tvBackupBytes.text = "$uploadedStr backed up · $pendingStr pending"
+        // Warning banner handling
+        when (val qStatus = quota.status) {
+            is QuotaStatus.AccountDisabled -> {
+                binding.cardErrorBanner.visibility = View.VISIBLE
+                binding.tvErrorBannerTitle.text = "Account Disabled"
+                binding.tvErrorBannerMessage.text = "Your account has been turned off by the owner. Backups are stopped."
+                binding.btnErrorSecondaryAction.visibility = View.GONE
+                binding.btnErrorAction.visibility = View.GONE
+            }
+            is QuotaStatus.DeviceRevoked -> {
+                binding.cardErrorBanner.visibility = View.VISIBLE
+                binding.tvErrorBannerTitle.text = "Device Removed"
+                binding.tvErrorBannerMessage.text = "This phone was removed from the server."
+                binding.btnErrorSecondaryAction.visibility = View.GONE
+                binding.btnErrorAction.visibility = View.VISIBLE
+                binding.btnErrorAction.text = "Pair Again"
+            }
+            is QuotaStatus.Full -> {
+                binding.cardErrorBanner.visibility = View.VISIBLE
+                binding.tvErrorBannerTitle.text = "Storage Full"
+                binding.tvErrorBannerMessage.text = "Storage is full. Backups are paused."
+                binding.btnErrorSecondaryAction.visibility = View.VISIBLE
+                binding.btnErrorSecondaryAction.text = "Ask Owner"
+                binding.btnErrorAction.visibility = View.VISIBLE
+                binding.btnErrorAction.text = "Retry Now"
+            }
+            is QuotaStatus.Warn90 -> {
+                binding.cardErrorBanner.visibility = View.VISIBLE
+                binding.tvErrorBannerTitle.text = "Storage Warning"
+                binding.tvErrorBannerMessage.text = "You've used ${qStatus.usagePercent}% of your space."
+                binding.btnErrorSecondaryAction.visibility = View.GONE
+                binding.btnErrorAction.visibility = View.VISIBLE
+                binding.btnErrorAction.text = "Ask for More"
+            }
+            is QuotaStatus.Warn80 -> {
+                binding.cardErrorBanner.visibility = View.VISIBLE
+                binding.tvErrorBannerTitle.text = "Storage Notice"
+                binding.tvErrorBannerMessage.text = "You've used ${qStatus.usagePercent}% of your space."
+                binding.btnErrorSecondaryAction.visibility = View.GONE
+                binding.btnErrorAction.visibility = View.VISIBLE
+                binding.btnErrorAction.text = "Ask for More"
+            }
+            else -> {
+                if (!state.lastError.isNullOrEmpty() && state.failedCount > 0) {
+                    binding.cardErrorBanner.visibility = View.VISIBLE
+                    binding.tvErrorBannerTitle.text = "Attention Required"
+                    binding.tvErrorBannerMessage.text = state.lastError
+                    binding.btnErrorSecondaryAction.visibility = View.GONE
+                    binding.btnErrorAction.visibility = View.VISIBLE
+                    binding.btnErrorAction.text = "Retry Now"
+                } else {
+                    binding.cardErrorBanner.visibility = View.GONE
                 }
             }
         }
@@ -336,6 +399,8 @@ class BackupFragment : Fragment() {
             binding.tvBackupProgressTitle.text = "Backing Up Photos..."
             binding.layoutBackupMetrics.visibility = View.VISIBLE
             binding.cardErrorBanner.visibility = View.GONE
+            binding.cpiBackupProgress.progress = state.percentComplete
+            binding.cpiBackupProgress.setIndicatorColor(ContextCompat.getColor(context, R.color.primary_blue))
 
             if (state.totalCount > 0) {
                 binding.cpiBackupProgress.isIndeterminate = false
@@ -359,47 +424,31 @@ class BackupFragment : Fragment() {
             binding.cpiBackupProgress.isIndeterminate = false
             binding.layoutBackupMetrics.visibility = View.GONE
 
-            if (!state.lastError.isNullOrEmpty() && state.failedCount > 0) {
-                binding.tvBackupProgressTitle.text = "Backup Paused"
-                binding.tvBackupProgressSubtitle.text = "${state.failedCount} file(s) failed to back up"
+            // Color ring: >=90 red, >=80 amber, else blue
+            val ringColor = when {
+                pct >= 90 -> android.graphics.Color.parseColor("#F44336")
+                pct >= 80 -> android.graphics.Color.parseColor("#FFB300")
+                else -> ContextCompat.getColor(context, R.color.primary_blue)
+            }
+            binding.cpiBackupProgress.setIndicatorColor(ringColor)
+            binding.cpiBackupProgress.progress = if (quotaBytes > 0) pct else 100
 
-                // Show readable error banner with clear action
-                binding.cardErrorBanner.visibility = View.VISIBLE
-                val err = state.lastError ?: ""
-                if (err.contains("user_disabled") || err.contains("Account disabled")) {
-                    binding.tvErrorBannerTitle.text = "Account Disabled"
-                    binding.tvErrorBannerMessage.text = "Your account has been disabled by the vault owner."
-                    binding.btnErrorAction.visibility = View.GONE
-                } else if (err.contains("quota_exceeded") || err.contains("Vault is full")) {
-                    binding.tvErrorBannerTitle.text = "Storage Limit Reached"
-                    binding.tvErrorBannerMessage.text = "Vault storage quota exceeded. Contact the vault owner."
-                    binding.btnErrorAction.visibility = View.VISIBLE
-                    binding.btnErrorAction.text = "Check Quota"
-                } else {
-                    binding.tvErrorBannerTitle.text = "Attention Required"
-                    binding.tvErrorBannerMessage.text = state.lastError
-                    binding.btnErrorAction.visibility = View.VISIBLE
-                    binding.btnErrorAction.text = "Retry Now"
-                }
+            val usageSummary = QuotaStateManager.formatUsageSummary(quota)
+            val freeSubtitle = QuotaStateManager.formatFreeSubtitle(quota)
+            val lastUpdated = QuotaStateManager.formatLastUpdated(quota.lastRefreshedAt)
+
+            binding.tvBackupBytes.text = usageSummary
+            binding.tvLastBackupTime.text = "$freeSubtitle · $lastUpdated"
+
+            if (state.isAllBackedUp) {
+                binding.tvBackupProgressTitle.text = "All Photos Backed Up"
+                binding.tvBackupProgressSubtitle.text = usageSummary
+            } else if (state.doneCount > 0) {
+                binding.tvBackupProgressTitle.text = "Ready to Back Up"
+                binding.tvBackupProgressSubtitle.text = "${state.doneCount} of ${state.totalCount} backed up · $freeSubtitle"
             } else {
-                binding.cardErrorBanner.visibility = View.GONE
-                val isMember = !SyncNodePreferences.isOwner(context)
-                val memberName = SyncNodePreferences.getDisplayName(context).ifEmpty { "Member" }
-                val memberQuotaBytes = SyncNodePreferences.getQuotaBytes(context)
-                val memberUsedBytes = SyncNodePreferences.getUsedBytes(context)
-                val memberQuotaStr = if (memberQuotaBytes == 0L) "Unlimited" else formatBytes(memberQuotaBytes)
-                val memberUsageStr = "Joined as $memberName · ${formatBytes(memberUsedBytes)} of $memberQuotaStr used"
-
-                if (state.isAllBackedUp) {
-                    binding.tvBackupProgressTitle.text = "All Photos Backed Up"
-                    binding.tvBackupProgressSubtitle.text = if (isMember) memberUsageStr else "All ${state.totalCount} items synced with node"
-                } else if (state.doneCount > 0) {
-                    binding.tvBackupProgressTitle.text = "Ready to Back Up"
-                    binding.tvBackupProgressSubtitle.text = if (isMember) memberUsageStr else "${state.doneCount} of ${state.totalCount} backed up"
-                } else {
-                    binding.tvBackupProgressTitle.text = "Ready to Back Up"
-                    binding.tvBackupProgressSubtitle.text = if (isMember) memberUsageStr else "Connected · Ready to sync"
-                }
+                binding.tvBackupProgressTitle.text = "Ready to Back Up"
+                binding.tvBackupProgressSubtitle.text = "Connected · $freeSubtitle"
             }
         }
     }
@@ -584,6 +633,12 @@ class BackupFragment : Fragment() {
                 "HASHING" -> {
                     binding.tvQueueDetails.text = "$formattedSize · Calculating SHA-256"
                     binding.tvQueueStatusBadge.text = "HASHING"
+                    binding.tvQueueStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.status_amber))
+                    binding.btnQueueRetry.visibility = View.GONE
+                }
+                "PAUSED_QUOTA" -> {
+                    binding.tvQueueDetails.text = "$formattedSize · Storage full"
+                    binding.tvQueueStatusBadge.text = "PAUSED"
                     binding.tvQueueStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.status_amber))
                     binding.btnQueueRetry.visibility = View.GONE
                 }

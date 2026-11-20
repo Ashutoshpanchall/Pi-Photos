@@ -33,7 +33,7 @@ public interface SyncLedgerDao {
     @Query("SELECT media_id FROM sync_ledger WHERE status = 'DONE'")
     List<Long> getDoneMediaIds();
 
-    @Query("SELECT * FROM sync_ledger WHERE status IN ('UPLOADING', 'HASHING', 'PENDING', 'FAILED') ORDER BY CASE status WHEN 'UPLOADING' THEN 1 WHEN 'HASHING' THEN 2 WHEN 'FAILED' THEN 3 ELSE 4 END, media_id DESC LIMIT :limit")
+    @Query("SELECT * FROM sync_ledger WHERE status IN ('UPLOADING', 'HASHING', 'PENDING', 'FAILED', 'PAUSED_QUOTA') ORDER BY CASE status WHEN 'UPLOADING' THEN 1 WHEN 'HASHING' THEN 2 WHEN 'PAUSED_QUOTA' THEN 3 WHEN 'FAILED' THEN 4 ELSE 5 END, media_id DESC LIMIT :limit")
     List<SyncLedgerEntity> getQueueItems(int limit);
 
     @Query("SELECT * FROM sync_ledger WHERE status IN ('DONE', 'FAILED') ORDER BY CASE WHEN uploaded_at > 0 THEN uploaded_at ELSE media_id END DESC LIMIT :limit")
@@ -59,6 +59,18 @@ public interface SyncLedgerDao {
 
     @Query("UPDATE sync_ledger SET status = 'PENDING', attempts = 0, last_error = null WHERE status = 'FAILED'")
     void resetAllFailed();
+
+    @Query("UPDATE sync_ledger SET status = 'PAUSED_QUOTA', last_error = :reason WHERE media_id = :mediaId")
+    void markPausedQuota(long mediaId, String reason);
+
+    @Query("UPDATE sync_ledger SET status = 'PAUSED_QUOTA', last_error = :reason WHERE status IN ('PENDING', 'HASHING', 'UPLOADING')")
+    void pauseAllActiveForQuota(String reason);
+
+    @Query("UPDATE sync_ledger SET status = 'PENDING', last_error = null WHERE status = 'PAUSED_QUOTA'")
+    int resumeAllPausedQuota();
+
+    @Query("SELECT COUNT(*) FROM sync_ledger WHERE status = 'PAUSED_QUOTA'")
+    int getPausedQuotaCount();
 
     @Query("DELETE FROM sync_ledger WHERE media_id NOT IN (:activeIds)")
     void deleteOrphans(List<Long> activeIds);

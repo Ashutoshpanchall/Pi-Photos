@@ -716,6 +716,91 @@ class PiHttpClient(
         }
     }
 
+    suspend fun listFiles(
+        endpointUrl: String,
+        authToken: String,
+        deviceId: String? = null,
+        folder: String? = null,
+        limit: Int = 100,
+        offset: Int = 0,
+        expectedFingerprint: String? = null
+    ): Result<List<FileInfo>> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val base = endpointUrl.trimEnd('/')
+            val params = mutableListOf<String>()
+            if (!deviceId.isNullOrEmpty()) params.add("device_id=$deviceId")
+            if (!folder.isNullOrEmpty()) params.add("folder=$folder")
+            if (limit > 0) params.add("limit=$limit")
+            if (offset > 0) params.add("offset=$offset")
+            val url = if (params.isNotEmpty()) "$base/api/v1/files?" + params.joinToString("&") else "$base/api/v1/files"
+
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to list files HTTP ${resp.code}: $bodyStr"))
+                }
+                val arr = org.json.JSONArray(bodyStr)
+                val files = (0 until arr.length()).map { i ->
+                    val obj = arr.getJSONObject(i)
+                    FileInfo(
+                        id = obj.getLong("id"),
+                        userId = obj.optString("user_id", ""),
+                        deviceId = obj.optString("device_id", ""),
+                        folder = obj.optString("folder", ""),
+                        relativePath = obj.optString("name", obj.optString("relative_path", "")),
+                        sha256 = obj.optString("sha256", ""),
+                        size = obj.optLong("size", 0L),
+                        dateTaken = if (obj.isNull("date_taken")) null else obj.optLong("date_taken"),
+                        uploadedAt = obj.optString("uploaded_at", "")
+                    )
+                }
+                Result.success(files)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun downloadFileContent(
+        endpointUrl: String,
+        authToken: String,
+        fileId: Long,
+        expectedFingerprint: String? = null,
+        outputStream: java.io.OutputStream
+    ): Result<Long> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val base = endpointUrl.trimEnd('/')
+            val url = "$base/api/v1/files/$fileId/content"
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val errBody = resp.body?.string().orEmpty()
+                    return@withContext Result.failure(HttpException(resp.code, "Download failed HTTP ${resp.code}: $errBody"))
+                }
+                val body = resp.body ?: return@withContext Result.failure(IOException("Empty response body"))
+                val bytesCopied = body.byteStream().use { input ->
+                    input.copyTo(outputStream, bufferSize = 64 * 1024)
+                }
+                Result.success(bytesCopied)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: PiHttpClient? = null

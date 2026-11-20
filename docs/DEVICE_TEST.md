@@ -91,8 +91,57 @@ You should see:
 
 ---
 
+## Phase U3: Member Experience & Quota Device Tests
+
+### Scenario 9: Member Quota Warnings (80% Amber, 90% Red)
+- Pre-requisites: Log in as a member with 100MB quota. Upload files until usage reaches 82MB.
+- Steps:
+  1. Open Backup screen. Observe usage ring.
+  2. Verify usage ring is colored amber with "82 MB of 100 MB used" and "18 MB free".
+  3. Upload further until 92MB used. Observe usage ring turns red.
+  4. Verify warning banner appears: "You've used 90% of your space".
+  5. Tap "Ask Owner": verify Android system share sheet opens with pre-composed request text.
+  6. Verify low-importance system notification "Storage space alert (90%)" is posted.
+
+### Scenario 10: Storage Full (507 Quota Exceeded) Clean Pause
+- Pre-requisites: Member has 100MB quota and 98MB used. Attempt to upload a 5MB photo.
+- Steps:
+  1. Trigger backup sync.
+  2. Verify pre-flight check blocks upload before pushing partial payload OR server returns 507 quota_exceeded.
+  3. Verify backup stops cleanly without crashing or infinite retry loop.
+  4. Verify ledger status marks item `PAUSED_QUOTA` and preserves chunk offset.
+  5. Verify red banner displays: "Storage is full. Backups are paused." with "Retry now" and "Ask owner" buttons.
+
+### Scenario 11: Auto-Resume Upon Quota Expansion
+- Pre-requisites: Device is in PAUSED_QUOTA state from Scenario 10.
+- Steps:
+  1. On server or owner device, raise member quota to 200MB.
+  2. On member device, either tap "Retry now" or allow app resume / 10-minute refresh to run.
+  3. Verify status automatically transitions to OK (<80%).
+  4. Verify `PAUSED_QUOTA` items move to `PENDING` and sync resumes automatically from previous offset.
+  5. Verify notification "Storage available - Backups resumed" is dispatched.
+
+### Scenario 12: Account Disabled (403) & Device Revoked (401)
+- Steps:
+  1. In admin panel, toggle member account status to disabled.
+  2. On member device, attempt sync or status refresh.
+  3. Verify banner: "Your account has been turned off by the owner. Backups are stopped."
+  4. In admin panel, revoke member device.
+  5. Verify banner: "This phone was removed from the server." with "Pair again" button.
+  6. Tap "Pair again" and verify stored token and fingerprint for the node are cleared and app routes to pairing screen.
+
+### Scenario 13: Browse Server Files & Download
+- Steps:
+  1. From Backup screen, tap "Browse Server Files".
+  2. Verify list of own device folders and file list (paged, 100 per page) with thumbnail, name, size, date taken.
+  3. Tap download icon on a photo.
+  4. Verify file is downloaded and inserted into MediaStore `Pictures/PiPhotos`.
+  5. Check gallery app to confirm photo is visible locally.
+
+---
+
 ## Sign-Off Gate
-Before proceeding to Phase U1 (Multi-User Manager UI):
-- [ ] All 8 manual test scenarios verified on physical device.
+Before proceeding:
+- [ ] All manual test scenarios verified on physical device.
 - [ ] No regression in zero-leak release build: `./gradlew assembleRelease verifyReleaseNoLeaks`.
 - [ ] Unit tests pass: `./gradlew testDebugUnitTest`.

@@ -9,6 +9,7 @@ import com.example.piphotos.db.SyncLedgerEntity
 import com.example.piphotos.db.SyncLedgerSummary
 import com.example.piphotos.media.LocalMediaIndex
 import com.example.piphotos.media.LocalMediaItem
+import com.example.piphotos.net.HttpException
 import com.example.piphotos.net.OffsetMismatchException
 import com.example.piphotos.net.PiHttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -59,6 +60,43 @@ class SyncRepository private constructor(
     private val _backedUpMediaIds = MutableStateFlow<Set<Long>>(emptySet())
     val backedUpMediaIds: StateFlow<Set<Long>> = _backedUpMediaIds.asStateFlow()
 
+    private val _quotaState = MutableStateFlow(
+        QuotaState(
+            status = QuotaStateManager.computeStatus(
+                SyncNodePreferences.getUsedBytes(context),
+                SyncNodePreferences.getQuotaBytes(context)
+            ),
+            usedBytes = SyncNodePreferences.getUsedBytes(context),
+            quotaBytes = SyncNodePreferences.getQuotaBytes(context),
+            freeBytes = if (SyncNodePreferences.getQuotaBytes(context) > 0) {
+                (SyncNodePreferences.getQuotaBytes(context) - SyncNodePreferences.getUsedBytes(context)).coerceAtLeast(0L)
+            } else 0L,
+            lastRefreshedAt = SyncNodePreferences.getLastSeenTimestamp(context)
+        )
+    )
+    val quotaState: StateFlow<QuotaState> = _quotaState.asStateFlow()
+
+    private var fullBackoffIndex = 0
+    private val fullBackoffIntervals = listOf(5 * 60 * 1000L, 15 * 60 * 1000L, 60 * 60 * 1000L)
+    private var lastFullCheckMs = 0L
+
+    fun canCheckServerWhileFull(): Boolean {
+        if (!_quotaState.value.isFullOrExceeded) return true
+        val interval = fullBackoffIntervals[fullBackoffIndex.coerceIn(0, fullBackoffIntervals.size - 1)]
+        val now = System.currentTimeMillis()
+        if (now - lastFullCheckMs >= interval) {
+            lastFullCheckMs = now
+            fullBackoffIndex = (fullBackoffIndex + 1).coerceAtMost(fullBackoffIntervals.size - 1)
+            return true
+        }
+        return false
+    }
+
+    fun resetFullBackoff() {
+        fullBackoffIndex = 0
+        lastFullCheckMs = 0L
+    }
+
     init {
         scope.launch {
             refreshSummary()
@@ -98,6 +136,27 @@ class SyncRepository private constructor(
         onProgressUpdate: (current: Int, total: Int, name: String) -> Unit
     ): SyncOutcome = withContext(Dispatchers.IO) {
         _syncState.value = _syncState.value.copy(isSyncing = true, lastError = null)
+
+        val initialQuota = refreshQuotaState()
+        when (initialQuota.status) {
+            is QuotaStatus.AccountDisabled -> {
+                val reason = initialQuota.errorMessage ?: "Your account has been turned off by the vault owner."
+                _syncState.value = _syncState.value.copy(isSyncing = false, lastError = reason)
+                return@withContext SyncOutcome.Interrupted(SyncError.Auth(reason))
+            }
+            is QuotaStatus.DeviceRevoked -> {
+                val reason = initialQuota.errorMessage ?: "This device has been removed from the server."
+                _syncState.value = _syncState.value.copy(isSyncing = false, lastError = reason)
+                return@withContext SyncOutcome.Interrupted(SyncError.Auth(reason))
+            }
+            is QuotaStatus.Full -> {
+                val reason = initialQuota.errorMessage ?: "Storage limit reached. Backups are paused."
+                ledgerDao.pauseAllActiveForQuota(reason)
+                _syncState.value = _syncState.value.copy(isSyncing = false, lastError = reason)
+                return@withContext SyncOutcome.Interrupted(SyncError.QuotaExceeded(reason))
+            }
+            else -> { /* proceed with sync */ }
+        }
 
         try {
             // 1. Gather monitored local media items
@@ -219,6 +278,27 @@ class SyncRepository private constructor(
                         currentFileIndex = totalProcessed
                     )
                     onProgressUpdate(totalProcessed, totalItemsToSync, filename)
+
+                    // Pre-flight quota check: if free quota < file size remaining, pause immediately
+                    val activeQuota = _quotaState.value
+                    val remainingFileBytes = (freshEntity.size - freshEntity.partOffset).coerceAtLeast(0L)
+                    if (activeQuota.quotaBytes > 0L && activeQuota.freeBytes < remainingFileBytes) {
+                        val pauseMsg = "Pre-flight: insufficient quota (${QuotaStateManager.formatBytes(activeQuota.freeBytes)} free for ${QuotaStateManager.formatBytes(remainingFileBytes)})"
+                        Log.w("SyncRepository", pauseMsg)
+                        ledgerDao.markPausedQuota(freshEntity.mediaId, pauseMsg)
+                        ledgerDao.pauseAllActiveForQuota(pauseMsg)
+                        _syncState.value = _syncState.value.copy(lastError = "Storage limit reached. Backups are paused.")
+                        _quotaState.value = activeQuota.copy(
+                            status = QuotaStatus.Full(
+                                if (activeQuota.quotaBytes > 0) ((activeQuota.usedBytes.toDouble() / activeQuota.quotaBytes.toDouble()) * 100).toInt().coerceAtLeast(100) else 100,
+                                isHardLimit = true
+                            ),
+                            freeBytes = 0L
+                        )
+                        StorageAlertNotificationHelper.notifyIfNeeded(context, _quotaState.value)
+                        return@withContext SyncOutcome.Interrupted(SyncError.QuotaExceeded(pauseMsg))
+                    }
+
                     ledgerDao.updateStatus(freshEntity.mediaId, "UPLOADING", null)
 
                     var fileOffset = freshEntity.partOffset
@@ -284,6 +364,14 @@ class SyncRepository private constructor(
                             val addedBytes = (freshEntity.size - freshEntity.partOffset).coerceAtLeast(0L)
                             currentUploadedBytes += addedBytes
                             SyncNodePreferences.incrementUsedBytes(context, addedBytes)
+                            val currentQuota = _quotaState.value
+                            val newUsed = currentQuota.usedBytes + addedBytes
+                            val newFree = (currentQuota.freeBytes - addedBytes).coerceAtLeast(0L)
+                            _quotaState.value = currentQuota.copy(
+                                usedBytes = newUsed,
+                                freeBytes = newFree,
+                                status = QuotaStateManager.computeStatus(newUsed, currentQuota.quotaBytes)
+                            )
                             ledgerDao.markDone(freshEntity.mediaId, System.currentTimeMillis())
                             refreshSummary()
                         } else {
@@ -307,11 +395,22 @@ class SyncRepository private constructor(
                             currentAttempt++
 
                             if (!syncErr.canRetry || currentAttempt >= 5) {
-                                ledgerDao.markFailed(freshEntity.mediaId, syncErr.message, currentAttempt)
-                                _syncState.value = _syncState.value.copy(lastError = syncErr.message)
-                                if (syncErr is SyncError.DiskFull || syncErr is SyncError.QuotaExceeded || syncErr is SyncError.Auth) {
+                                if (syncErr is SyncError.QuotaExceeded || syncErr is SyncError.DiskFull) {
+                                    ledgerDao.markPausedQuota(freshEntity.mediaId, syncErr.message)
+                                    ledgerDao.pauseAllActiveForQuota(syncErr.message)
+                                    _syncState.value = _syncState.value.copy(lastError = syncErr.message)
+                                    _quotaState.value = QuotaStateManager.markError(_quotaState.value, HttpException(507, syncErr.message))
+                                    StorageAlertNotificationHelper.notifyIfNeeded(context, _quotaState.value)
+                                    return@withContext SyncOutcome.Interrupted(syncErr)
+                                } else if (syncErr is SyncError.Auth) {
+                                    val statusCode = if (syncErr.message.contains("disabled", ignoreCase = true)) 403 else 401
+                                    _quotaState.value = QuotaStateManager.markError(_quotaState.value, HttpException(statusCode, syncErr.message))
+                                    ledgerDao.markFailed(freshEntity.mediaId, syncErr.message, currentAttempt)
+                                    _syncState.value = _syncState.value.copy(lastError = syncErr.message)
                                     return@withContext SyncOutcome.Interrupted(syncErr)
                                 }
+                                ledgerDao.markFailed(freshEntity.mediaId, syncErr.message, currentAttempt)
+                                _syncState.value = _syncState.value.copy(lastError = syncErr.message)
                                 break
                             } else {
                                 delay((1L shl currentAttempt) * 500L)
@@ -421,8 +520,59 @@ class SyncRepository private constructor(
     fun retryAllFailed() {
         scope.launch {
             ledgerDao.resetAllFailed()
+            ledgerDao.resumeAllPausedQuota()
+            resetFullBackoff()
             refreshSummary()
+            refreshQuotaState()
         }
+    }
+
+    suspend fun refreshQuotaState(force: Boolean = false): QuotaState = withContext(Dispatchers.IO) {
+        val serverUrl = SyncNodePreferences.getServerUrl(context)
+        val authToken = SyncNodePreferences.getAuthToken(context)
+        val fp = SyncNodePreferences.getTlsFingerprint(context)
+        if (serverUrl.isNullOrEmpty() || authToken.isNullOrEmpty()) {
+            return@withContext _quotaState.value
+        }
+
+        if (!force && _quotaState.value.isFullOrExceeded && !canCheckServerWhileFull()) {
+            return@withContext _quotaState.value
+        }
+
+        val previous = _quotaState.value
+        val result = httpClient.getStatus(serverUrl, authToken, fp)
+        val newState = result.fold(
+            onSuccess = { statusRes ->
+                val updated = QuotaStateManager.updateFromStatus(statusRes)
+                SyncNodePreferences.saveUserProfile(
+                    context,
+                    role = SyncNodePreferences.getUserRole(context),
+                    displayName = SyncNodePreferences.getDisplayName(context),
+                    quotaBytes = statusRes.userQuota,
+                    usedBytes = statusRes.userUsed,
+                    deviceName = SyncNodePreferences.getDeviceName(context)
+                )
+                resetFullBackoff()
+                updated
+            },
+            onFailure = { err ->
+                QuotaStateManager.markError(previous, err)
+            }
+        )
+
+        _quotaState.value = newState
+        StorageAlertNotificationHelper.notifyIfNeeded(context, newState)
+
+        // Auto-resume check: if storage is no longer full/blocked and paused items exist
+        if (!newState.isBlocked && ledgerDao.getPausedQuotaCount() > 0) {
+            val resumed = ledgerDao.resumeAllPausedQuota()
+            if (resumed > 0) {
+                refreshSummary()
+                MediaSyncWorker.enqueueImmediateSync(context, force = true)
+            }
+        }
+
+        newState
     }
 
     fun retryFailed(mediaId: Long) {

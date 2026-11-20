@@ -149,6 +149,14 @@ object SyncNodePreferences {
         getPrefs(context).edit().putLong(KEY_USED_BYTES, (current + delta).coerceAtLeast(0L)).apply()
     }
 
+    fun getServerName(context: Context): String {
+        return getPrefs(context).getString(KEY_NODE_NAME, "PiPhotos Vault") ?: "PiPhotos Vault"
+    }
+
+    fun getDeviceName(context: Context): String {
+        return getPrefs(context).getString(KEY_DEVICE_NAME, "") ?: ""
+    }
+
     fun clearPairedNode(context: Context) {
         getPrefs(context).edit().clear().apply()
     }

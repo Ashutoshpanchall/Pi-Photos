@@ -31,7 +31,8 @@ sealed class SyncError(val message: String, val canRetry: Boolean) {
                     FileUnreadable("Could not read local media file: ${t.localizedMessage}")
                 is HttpException -> {
                     when (t.code) {
-                        401, 403 -> Auth("Authentication failed on storage node. Please re-pair your device.")
+                        401 -> Auth("This device has been removed from the server.")
+                        403 -> Auth("Your account has been turned off by the vault owner.")
                         507 -> {
                             if (t.message?.contains("quota", ignoreCase = true) == true) {
                                 QuotaExceeded("User storage quota exceeded on storage node.")

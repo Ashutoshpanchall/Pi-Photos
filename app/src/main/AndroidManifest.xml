@@ -74,6 +74,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".ServerFilesActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".InviteUserActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />

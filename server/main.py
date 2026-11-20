@@ -914,10 +914,12 @@ async def get_me(authorization: Optional[str] = Header(None)) -> MeResponse:
 async def list_files(
     device_id: Optional[str] = Query(None),
     folder: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     authorization: Optional[str] = Header(None),
 ) -> list[FileInfo]:
     identity = _require_auth(authorization)
-    files = db.list_files_filtered(identity.user_id, device_id=device_id, folder=folder)
+    files = db.list_files_filtered(identity.user_id, device_id=device_id, folder=folder, limit=limit, offset=offset)
     return [
         FileInfo(
             id=f.id,

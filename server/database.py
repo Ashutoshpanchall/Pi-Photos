@@ -564,6 +564,8 @@ class Database:
         user_id: str,
         device_id: Optional[str] = None,
         folder: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
     ) -> list[FileRow]:
         query = "SELECT * FROM files WHERE user_id = ?"
         params: list[object] = [user_id]
@@ -573,7 +575,8 @@ class Database:
         if folder:
             query += " AND folder = ?"
             params.append(folder)
-        query += " ORDER BY id DESC"
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         with self._cursor() as cur:
             cur.execute(query, params)
             return [
