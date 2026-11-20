@@ -129,4 +129,25 @@ class SyncRepositoryLogicTest {
         onBytesSent(64 * 1024L, 2500L)
         assertEquals(2, writesCount)
     }
+
+    @Test
+    fun offsetMismatchRetry_capsAtThreeRetries() {
+        var offsetMismatchRetries = 0
+        var failedWithError: String? = null
+
+        fun handleMismatch(serverOffset: Long): Boolean {
+            offsetMismatchRetries++
+            if (offsetMismatchRetries > 3) {
+                failedWithError = "Offset mismatch limit reached (server offset $serverOffset)"
+                return false // break
+            }
+            return true // continue
+        }
+
+        assertTrue(handleMismatch(100L)) // 1st retry
+        assertTrue(handleMismatch(200L)) // 2nd retry
+        assertTrue(handleMismatch(300L)) // 3rd retry
+        assertFalse(handleMismatch(400L)) // 4th mismatch triggers break & failure
+        assertEquals("Offset mismatch limit reached (server offset 400)", failedWithError)
+    }
 }

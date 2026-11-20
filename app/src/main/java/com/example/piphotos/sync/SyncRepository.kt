@@ -1,6 +1,7 @@
 package com.example.piphotos.sync
 
 import android.content.Context
+import android.util.Log
 import androidx.room.InvalidationTracker
 import com.example.piphotos.BackupPreferences
 import com.example.piphotos.db.AppDatabase
@@ -187,6 +188,9 @@ class SyncRepository private constructor(
                                 item.partOffset = offset
                             }
                         }
+                    } else {
+                        val checkError = checkResult.exceptionOrNull()
+                        Log.w("SyncRepository", "Batch checkUpload failed (proceeding to direct upload): ${checkError?.message}", checkError)
                     }
                 }
 
@@ -220,6 +224,7 @@ class SyncRepository private constructor(
                     var fileOffset = freshEntity.partOffset
                     var uploadSuccess = false
                     var currentAttempt = freshEntity.attempts
+                    var offsetMismatchRetries = 0
                     var lastWriteMs = System.currentTimeMillis()
                     var bytesSinceLastWrite = 0L
                     var lastPersistedOffset = fileOffset
@@ -282,6 +287,14 @@ class SyncRepository private constructor(
                         } else {
                             val ex = uploadResult.exceptionOrNull()!!
                             if (ex is OffsetMismatchException) {
+                                offsetMismatchRetries++
+                                if (offsetMismatchRetries > 3) {
+                                    val errorMsg = "Offset mismatch limit reached (server offset ${ex.serverOffset})"
+                                    Log.e("SyncRepository", "Capping OffsetMismatchException retries at 3 for mediaId=${freshEntity.mediaId}: $errorMsg")
+                                    ledgerDao.markFailed(freshEntity.mediaId, errorMsg, currentAttempt + 1)
+                                    _syncState.value = _syncState.value.copy(lastError = errorMsg)
+                                    break
+                                }
                                 fileOffset = ex.serverOffset
                                 ledgerDao.updatePartOffset(freshEntity.mediaId, fileOffset)
                                 lastPersistedOffset = fileOffset

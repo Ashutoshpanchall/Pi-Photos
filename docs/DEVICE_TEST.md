@@ -9,25 +9,31 @@ This checklist defines the manual verification procedure for **PiPhotos Android 
 - [ ] **Node Server Running**:
   - Run the server locally on your PC or Raspberry Pi:
     ```bash
-    cd server
-    python -m venv venv
-    venv\Scripts\activate  # Windows: venv\Scripts\activate, Linux: source venv/bin/activate
-    pip install -r requirements.txt
-    python run.py
+    # Linux / Raspberry Pi:
+    ./server/run.sh
+
+    # Windows (PowerShell):
+    .\server\run.ps1
     ```
-  - Verify mDNS announcement in startup banner:
-    `[INFO] mDNS advertised: _piphotos._tcp. local port 8443`
-  - Open a pairing window on the server:
-    ```bash
-    python -m server.cli pair open
+  - The server automatically sets up its `.venv`, installs requirements, generates TLS certificates, and prints the startup banner with the active 6-digit pairing code and certificate SHA-256 fingerprint:
+    ```text
+============================================================
+  PiPhotos Storage Node — Home Vault
+  Server ID: f0952fd6-9408-4d73-a611-e391bd844a06
+  Listening: https://0.0.0.0:8443
+  TLS fingerprint: FA:8F:3A:AB:AA:BE:03:CE:26:8F:59:99:1C:16:FF:29:E4:11:D6:4D:6F:F0:23:C4:9A:95:DE:3B:DA:67:F3:FC
+  mDNS: ACTIVE (192.168.1.50)
+  Pairing code: 533516  (expires in 10 minutes or 5 failed attempts)
+============================================================
+[SERVER_READY]
     ```
-    Note the printed **6-digit pairing code** and certificate **SHA-256 fingerprint**.
+  - Note the printed **Pairing code** (e.g. `533516`) and **TLS fingerprint** from the console banner.
 
 - [ ] **Android Device**:
   - Connected to the **same local Wi-Fi network** as the server.
   - Install debug build on device:
     ```bash
-    ./gradlew installNasSyncDebug
+    ./gradlew installDebug
     ```
   - Monitor logcat during testing:
     ```bash
