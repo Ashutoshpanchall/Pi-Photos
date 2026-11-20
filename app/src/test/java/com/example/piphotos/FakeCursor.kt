@@ -51,7 +51,8 @@ class FakeCursor(
 
     private fun getCurrentValue(columnIndex: Int): Any? {
         if (position !in 0 until rows.size) throw IllegalStateException("Cursor position $position out of bounds")
-        return rows[position][columnIndex]
+        val row = rows[position]
+        return if (columnIndex in row.indices) row[columnIndex] else null
     }
 
     override fun getString(columnIndex: Int): String? = getCurrentValue(columnIndex)?.toString()

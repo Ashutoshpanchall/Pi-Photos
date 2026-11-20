@@ -27,7 +27,8 @@ class PhaseG2ScannerTest {
                 "Camera", // BUCKET_DISPLAY_NAME
                 0L, // DURATION
                 3500000L, // SIZE
-                5L // GENERATION_MODIFIED
+                5L, // GENERATION_MODIFIED
+                "IMG_20231114_001.jpg" // DISPLAY_NAME
             ),
             arrayOf<Any?>(
                 102L, // _ID
@@ -40,7 +41,8 @@ class PhaseG2ScannerTest {
                 "Screenshots", // BUCKET_DISPLAY_NAME
                 45000L, // DURATION
                 12500000L, // SIZE
-                7L // GENERATION_MODIFIED
+                7L, // GENERATION_MODIFIED
+                "VID_20231114_002.mp4" // DISPLAY_NAME
             )
         )
 
@@ -57,12 +59,14 @@ class PhaseG2ScannerTest {
         assertEquals("Camera", imageItem.bucketName)
         assertEquals(1001L, imageItem.bucketId)
         assertEquals(5L, imageItem.generationModified)
+        assertEquals("IMG_20231114_001.jpg", imageItem.displayName)
 
         val videoItem = items[1]
         assertEquals(102L, videoItem.id)
         assertTrue(videoItem.isVideo)
         assertEquals("video/mp4", videoItem.mimeType)
         assertEquals(45000L, videoItem.durationMs)
+        assertEquals("VID_20231114_002.mp4", videoItem.displayName)
         assertEquals("Screenshots", videoItem.bucketName)
         assertEquals(7L, videoItem.generationModified)
     }
@@ -192,7 +196,8 @@ class PhaseG2ScannerTest {
                     if (i % 2 == 0) "Camera" else "Screenshots",
                     if (isVideo) 15000L else 0L,
                     2500000L,
-                    id
+                    id,
+                    "media_$id.${if (isVideo) "mp4" else "jpg"}"
                 )
             )
         }

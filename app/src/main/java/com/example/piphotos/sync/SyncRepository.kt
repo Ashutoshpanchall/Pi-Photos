@@ -46,7 +46,7 @@ sealed class SyncOutcome {
 
 class SyncRepository private constructor(
     private val context: Context,
-    private val httpClient: PiHttpClient = PiHttpClient(context)
+    private val httpClient: PiHttpClient = PiHttpClient.getInstance(context)
 ) {
     private val db = AppDatabase.getInstance(context)
     private val ledgerDao = db.syncLedgerDao()
@@ -111,113 +111,196 @@ class SyncRepository private constructor(
             // 2. Reconcile with Room ledger (insert new, reset modified generations)
             reconcileLedgerWithMedia(filteredItems)
 
-            // 3. Hash only new or changed files
-            hashPendingItems(filteredItems, isCancelled)
-            if (isCancelled()) return@withContext SyncOutcome.Cancelled
+            // Fast O(1) media item lookup
+            val mediaItemMap = filteredItems.associateBy { it.id }
 
-            // 4. Batch existence check against node (POST /api/v1/upload/check)
-            performBatchExistenceCheck(pairedNode)
-            if (isCancelled()) return@withContext SyncOutcome.Cancelled
+            // Cache initial summary in memory to avoid querying Room during streaming
+            val initialSummary = ledgerDao.summary
+            var currentUploadedBytes = initialSummary.uploadedBytes
+            val totalLibraryBytes = initialSummary.totalBytes
 
-            // 5. Stream upload remaining files
+            // Get pending or failed items
+            val pendingItems = ledgerDao.pendingOrFailedItems
+            val totalItemsToSync = pendingItems.size
+
+            if (pendingItems.isEmpty()) {
+                _syncState.value = _syncState.value.copy(isSyncing = false)
+                return@withContext SyncOutcome.Success(uploadedCount = 0, skippedCount = 0)
+            }
+
             var uploadedCount = 0
             var skippedCount = 0
-            val pendingUploads = ledgerDao.pendingOrFailedItems
-            val totalToUpload = pendingUploads.size
-
+            var totalProcessed = 0
             var sessionBytesTransferred = 0L
             val sessionStartTimeMs = System.currentTimeMillis()
 
-            for ((index, ledgerItem) in pendingUploads.withIndex()) {
+            // 3. Process in batches of 25: lazy hash -> batch check -> upload remaining
+            val batches = pendingItems.chunked(25)
+
+            for (batch in batches) {
                 if (isCancelled()) {
                     _syncState.value = _syncState.value.copy(isSyncing = false)
                     return@withContext SyncOutcome.Cancelled
                 }
 
-                val mediaItem = filteredItems.find { it.id == ledgerItem.mediaId }
-                if (mediaItem == null || ledgerItem.sha256.isNullOrEmpty()) {
-                    continue
+                // 3a. Lazy hash unhashed items in this batch
+                for (item in batch) {
+                    if (isCancelled()) return@withContext SyncOutcome.Cancelled
+                    val mediaItem = mediaItemMap[item.mediaId] ?: continue
+                    if (item.sha256.isNullOrEmpty()) {
+                        ledgerDao.updateStatus(item.mediaId, "HASHING", null)
+                        val hash = MediaHashCalculator.computeSha256(context, mediaItem.contentUri)
+                        if (hash != null) {
+                            ledgerDao.updateHash(item.mediaId, hash, mediaItem.generationModified, "PENDING")
+                            item.sha256 = hash
+                        } else {
+                            ledgerDao.markFailed(item.mediaId, "Could not compute file hash", 1)
+                        }
+                    }
                 }
 
-                val ext = if (mediaItem.isVideo) "mp4" else if (mediaItem.mimeType.contains("png")) "png" else "jpg"
-                val filename = "media_${mediaItem.id}.$ext"
-                val folder = mediaItem.bucketName.ifEmpty { "Default" }
-                val dateTakenEpoch = if (mediaItem.dateTakenMs > 0) mediaItem.dateTakenMs / 1000L else mediaItem.dateModifiedSec
-
-                _syncState.value = _syncState.value.copy(
-                    currentFileName = filename,
-                    currentFileIndex = index + 1
-                )
-                onProgressUpdate(index + 1, totalToUpload, filename)
-                ledgerDao.updateStatus(ledgerItem.mediaId, "UPLOADING", null)
-
-                var fileOffset = ledgerItem.partOffset
-                var uploadSuccess = false
-                var currentAttempt = ledgerItem.attempts
-
-                while (!uploadSuccess && currentAttempt < 5) {
-                    if (isCancelled()) return@withContext SyncOutcome.Cancelled
-
-                    val uploadResult = httpClient.uploadStreaming(
+                // 3b. Batch check upload state against server (POST /api/v1/upload/check)
+                val hashesToCheck = batch.mapNotNull { it.sha256 }
+                if (hashesToCheck.isNotEmpty()) {
+                    val checkResult = httpClient.checkUpload(
                         endpointUrl = pairedNode.endpointUrl,
                         authToken = pairedNode.authToken,
-                        sha256 = ledgerItem.sha256!!,
-                        deviceId = pairedNode.deviceId,
-                        folder = folder,
-                        filename = filename,
-                        takenEpochSec = dateTakenEpoch,
-                        totalSize = ledgerItem.size,
-                        resumeOffset = fileOffset,
-                        contentUri = mediaItem.contentUri,
-                        mimeType = mediaItem.mimeType,
-                        expectedFingerprint = pairedNode.tlsFingerprint.ifEmpty { null },
-                        onBytesSent = { bytesSent ->
-                            sessionBytesTransferred += bytesSent
-                            fileOffset += bytesSent
-                            ledgerDao.updatePartOffset(ledgerItem.mediaId, fileOffset)
-
-                            // Calculate honest speed & ETA
-                            val elapsedSec = ((System.currentTimeMillis() - sessionStartTimeMs) / 1000.0).coerceAtLeast(0.5)
-                            val speedBps = (sessionBytesTransferred / elapsedSec).toLong()
-
-                            val currentSummary = ledgerDao.summary
-                            val remainingBytes = (currentSummary.totalBytes - currentSummary.uploadedBytes).coerceAtLeast(0L)
-                            val etaSec = if (speedBps > 1024) remainingBytes / speedBps else -1L
-
-                            _syncState.value = _syncState.value.copy(
-                                speedBytesPerSec = speedBps,
-                                etaSeconds = etaSec
-                            )
-                        }
+                        hashes = hashesToCheck,
+                        expectedFingerprint = pairedNode.tlsFingerprint.ifEmpty { null }
                     )
 
-                    if (uploadResult.isSuccess) {
-                        uploadSuccess = true
-                        uploadedCount++
-                        ledgerDao.markDone(ledgerItem.mediaId, System.currentTimeMillis())
-                    } else {
-                        val ex = uploadResult.exceptionOrNull()!!
-                        if (ex is OffsetMismatchException) {
-                            // Server provided actual stored offset — update and retry
-                            fileOffset = ex.serverOffset
-                            ledgerDao.updatePartOffset(ledgerItem.mediaId, fileOffset)
-                            continue
+                    if (checkResult.isSuccess) {
+                        val checkData = checkResult.getOrThrow()
+                        for (item in batch) {
+                            val hash = item.sha256 ?: continue
+                            if (checkData.existing.contains(hash)) {
+                                ledgerDao.markDone(item.mediaId, System.currentTimeMillis())
+                                skippedCount++
+                                totalProcessed++
+                                currentUploadedBytes += item.size
+                                val mediaItem = mediaItemMap[item.mediaId]
+                                val filename = sanitizeFilename(mediaItem?.displayName, mediaItem?.mimeType, mediaItem?.isVideo == true, item.mediaId)
+                                onProgressUpdate(totalProcessed, totalItemsToSync, filename)
+                            } else if (checkData.partial.containsKey(hash)) {
+                                val offset = checkData.partial[hash] ?: 0L
+                                ledgerDao.updatePartOffset(item.mediaId, offset)
+                                item.partOffset = offset
+                            }
+                        }
+                    }
+                }
+
+                // 3c. Upload remaining uncompleted items in this batch
+                for (batchItem in batch) {
+                    if (isCancelled()) {
+                        _syncState.value = _syncState.value.copy(isSyncing = false)
+                        return@withContext SyncOutcome.Cancelled
+                    }
+
+                    val freshEntity = ledgerDao.getByMediaId(batchItem.mediaId) ?: continue
+                    if (freshEntity.status == "DONE" || freshEntity.sha256.isNullOrEmpty()) {
+                        continue
+                    }
+
+                    val mediaItem = mediaItemMap[freshEntity.mediaId] ?: continue
+                    val hash = freshEntity.sha256!!
+
+                    val filename = sanitizeFilename(mediaItem.displayName, mediaItem.mimeType, mediaItem.isVideo, mediaItem.id)
+                    val folder = mediaItem.bucketName.ifEmpty { "Default" }
+                    val dateTakenEpoch = if (mediaItem.dateTakenMs > 0) mediaItem.dateTakenMs / 1000L else mediaItem.dateModifiedSec
+
+                    totalProcessed++
+                    _syncState.value = _syncState.value.copy(
+                        currentFileName = filename,
+                        currentFileIndex = totalProcessed
+                    )
+                    onProgressUpdate(totalProcessed, totalItemsToSync, filename)
+                    ledgerDao.updateStatus(freshEntity.mediaId, "UPLOADING", null)
+
+                    var fileOffset = freshEntity.partOffset
+                    var uploadSuccess = false
+                    var currentAttempt = freshEntity.attempts
+                    var lastWriteMs = System.currentTimeMillis()
+                    var bytesSinceLastWrite = 0L
+                    var lastPersistedOffset = fileOffset
+
+                    while (!uploadSuccess && currentAttempt < 5) {
+                        if (isCancelled()) return@withContext SyncOutcome.Cancelled
+
+                        val uploadResult = httpClient.uploadStreaming(
+                            endpointUrl = pairedNode.endpointUrl,
+                            authToken = pairedNode.authToken,
+                            sha256 = hash,
+                            deviceId = pairedNode.deviceId,
+                            folder = folder,
+                            filename = filename,
+                            takenEpochSec = dateTakenEpoch,
+                            totalSize = freshEntity.size,
+                            resumeOffset = fileOffset,
+                            contentUri = mediaItem.contentUri,
+                            mimeType = mediaItem.mimeType,
+                            expectedFingerprint = pairedNode.tlsFingerprint.ifEmpty { null },
+                            onBytesSent = { bytesSent ->
+                                sessionBytesTransferred += bytesSent
+                                fileOffset += bytesSent
+                                bytesSinceLastWrite += bytesSent
+
+                                val now = System.currentTimeMillis()
+                                // Throttle Room writes to >=1s or >=4MB, no Room summary queries
+                                if (now - lastWriteMs >= 1000L || bytesSinceLastWrite >= 4 * 1024 * 1024L) {
+                                    ledgerDao.updatePartOffset(freshEntity.mediaId, fileOffset)
+                                    lastWriteMs = now
+                                    bytesSinceLastWrite = 0L
+                                    lastPersistedOffset = fileOffset
+
+                                    val elapsedSec = ((now - sessionStartTimeMs) / 1000.0).coerceAtLeast(0.5)
+                                    val speedBps = (sessionBytesTransferred / elapsedSec).toLong()
+                                    val remainingBytes = (totalLibraryBytes - (currentUploadedBytes + sessionBytesTransferred)).coerceAtLeast(0L)
+                                    val etaSec = if (speedBps > 1024) remainingBytes / speedBps else -1L
+
+                                    _syncState.value = _syncState.value.copy(
+                                        speedBytesPerSec = speedBps,
+                                        etaSeconds = etaSec
+                                    )
+                                }
+                            }
+                        )
+
+                        // Flush unwritten offset if loop finished or failed
+                        if (bytesSinceLastWrite > 0L && fileOffset > lastPersistedOffset) {
+                            ledgerDao.updatePartOffset(freshEntity.mediaId, fileOffset)
+                            bytesSinceLastWrite = 0L
+                            lastPersistedOffset = fileOffset
                         }
 
-                        val syncErr = SyncError.fromThrowable(ex)
-                        currentAttempt++
-
-                        if (!syncErr.canRetry || currentAttempt >= 5) {
-                            ledgerDao.markFailed(ledgerItem.mediaId, syncErr.message, currentAttempt)
-                            _syncState.value = _syncState.value.copy(lastError = syncErr.message)
-                            // If storage full or auth failure, halt immediately
-                            if (syncErr is SyncError.DiskFull || syncErr is SyncError.QuotaExceeded || syncErr is SyncError.Auth) {
-                                return@withContext SyncOutcome.Interrupted(syncErr)
-                            }
-                            break
+                        if (uploadResult.isSuccess) {
+                            uploadSuccess = true
+                            uploadedCount++
+                            currentUploadedBytes += (freshEntity.size - freshEntity.partOffset)
+                            ledgerDao.markDone(freshEntity.mediaId, System.currentTimeMillis())
+                            refreshSummary()
                         } else {
-                            // Exponential backoff
-                            delay((1L shl currentAttempt) * 500L)
+                            val ex = uploadResult.exceptionOrNull()!!
+                            if (ex is OffsetMismatchException) {
+                                fileOffset = ex.serverOffset
+                                ledgerDao.updatePartOffset(freshEntity.mediaId, fileOffset)
+                                lastPersistedOffset = fileOffset
+                                continue
+                            }
+
+                            val syncErr = SyncError.fromThrowable(ex)
+                            currentAttempt++
+
+                            if (!syncErr.canRetry || currentAttempt >= 5) {
+                                ledgerDao.markFailed(freshEntity.mediaId, syncErr.message, currentAttempt)
+                                _syncState.value = _syncState.value.copy(lastError = syncErr.message)
+                                if (syncErr is SyncError.DiskFull || syncErr is SyncError.QuotaExceeded || syncErr is SyncError.Auth) {
+                                    return@withContext SyncOutcome.Interrupted(syncErr)
+                                }
+                                break
+                            } else {
+                                delay((1L shl currentAttempt) * 500L)
+                            }
                         }
                     }
                 }
@@ -304,54 +387,6 @@ class SyncRepository private constructor(
         }
     }
 
-    private suspend fun hashPendingItems(items: List<LocalMediaItem>, isCancelled: () -> Boolean) {
-        val pendingHash = ledgerDao.allItems.filter { it.sha256.isNullOrEmpty() }
-        val itemMap = items.associateBy { it.id }
-
-        for (ledgerItem in pendingHash) {
-            if (isCancelled()) return
-            val mediaItem = itemMap[ledgerItem.mediaId] ?: continue
-
-            ledgerDao.updateStatus(ledgerItem.mediaId, "HASHING", null)
-            val hash = MediaHashCalculator.computeSha256(context, mediaItem.contentUri)
-            if (hash != null) {
-                ledgerDao.updateHash(ledgerItem.mediaId, hash, mediaItem.generationModified, "PENDING")
-            } else {
-                ledgerDao.markFailed(ledgerItem.mediaId, "Could not compute file hash", 1)
-            }
-        }
-    }
-
-    private suspend fun performBatchExistenceCheck(pairedNode: PairedNode) {
-        val unverifiedItems = ledgerDao.pendingOrFailedItems.filter { !it.sha256.isNullOrEmpty() }
-        if (unverifiedItems.isEmpty()) return
-
-        // Batch in groups of 500
-        val batches = unverifiedItems.chunked(500)
-        for (batch in batches) {
-            val hashes = batch.mapNotNull { it.sha256 }
-            val checkResult = httpClient.checkUpload(
-                endpointUrl = pairedNode.endpointUrl,
-                authToken = pairedNode.authToken,
-                hashes = hashes,
-                expectedFingerprint = pairedNode.tlsFingerprint.ifEmpty { null }
-            )
-
-            if (checkResult.isSuccess) {
-                val data = checkResult.getOrThrow()
-                for (item in batch) {
-                    val hash = item.sha256 ?: continue
-                    if (data.existing.contains(hash)) {
-                        ledgerDao.markDone(item.mediaId, System.currentTimeMillis())
-                    } else if (data.partial.containsKey(hash)) {
-                        val offset = data.partial[hash] ?: 0L
-                        ledgerDao.updatePartOffset(item.mediaId, offset)
-                    }
-                }
-            }
-        }
-    }
-
     fun retryAllFailed() {
         scope.launch {
             ledgerDao.resetAllFailed()
@@ -413,6 +448,53 @@ class SyncRepository private constructor(
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: SyncRepository(context.applicationContext).also { INSTANCE = it }
             }
+        }
+
+        fun deriveExtensionFromMimeType(mimeType: String?, isVideo: Boolean): String {
+            val normalized = (mimeType ?: "").lowercase().trim()
+            return when {
+                normalized == "image/jpeg" || normalized == "image/jpg" -> "jpg"
+                normalized == "image/png" -> "png"
+                normalized == "image/heic" || normalized == "image/heif" -> "heic"
+                normalized == "image/webp" -> "webp"
+                normalized == "image/gif" -> "gif"
+                normalized == "image/x-adobe-dng" || normalized == "image/dng" -> "dng"
+                normalized == "image/tiff" -> "tiff"
+                normalized == "image/bmp" || normalized == "image/x-ms-bmp" -> "bmp"
+                normalized == "image/avif" -> "avif"
+
+                normalized == "video/mp4" -> "mp4"
+                normalized == "video/quicktime" -> "mov"
+                normalized == "video/webm" -> "webm"
+                normalized == "video/x-matroska" -> "mkv"
+                normalized == "video/3gpp" || normalized == "video/3gp" -> "3gp"
+                normalized == "video/x-msvideo" || normalized == "video/avi" -> "avi"
+
+                normalized.startsWith("video/") -> "mp4"
+                isVideo -> "mp4"
+                else -> "jpg"
+            }
+        }
+
+        fun sanitizeFilename(rawName: String?, mimeType: String?, isVideo: Boolean, mediaId: Long): String {
+            val ext = deriveExtensionFromMimeType(mimeType, isVideo)
+            if (rawName.isNullOrBlank()) {
+                return "media_$mediaId.$ext"
+            }
+
+            var cleaned = rawName
+                .replace("..", "__")
+                .replace(Regex("[/\\\\:*?\"<>|\\x00-\\x1F]"), "_")
+                .trim('.', ' ', '\t', '\r', '\n')
+
+            if (cleaned.isBlank()) {
+                return "media_$mediaId.$ext"
+            }
+
+            val lastDot = cleaned.lastIndexOf('.')
+            val baseName = if (lastDot > 0) cleaned.substring(0, lastDot).trim() else cleaned
+            val finalBase = if (baseName.isNotBlank()) baseName else "media_$mediaId"
+            return "$finalBase.$ext"
         }
     }
 }

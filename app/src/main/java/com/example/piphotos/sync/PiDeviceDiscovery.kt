@@ -1,6 +1,8 @@
 package com.example.piphotos.sync
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -62,7 +64,7 @@ sealed class DiscoveryUiState {
  */
 class PiDeviceDiscovery(
     private val context: Context,
-    private val httpClient: PiHttpClient = PiHttpClient(context)
+    private val httpClient: PiHttpClient = PiHttpClient.getInstance(context)
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var discoveryJob: Job? = null
@@ -356,6 +358,17 @@ class PiDeviceDiscovery(
 
     private fun getLocalIpv4Address(): String? {
         try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val wifiNet = cm?.allNetworks?.firstOrNull { net ->
+                cm.getNetworkCapabilities(net)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }
+            if (wifiNet != null) {
+                val linkProps = cm.getLinkProperties(wifiNet)
+                val wifiAddr = linkProps?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }?.hostAddress
+                if (wifiAddr != null && (wifiAddr.startsWith("192.168.") || wifiAddr.startsWith("10.") || wifiAddr.startsWith("172."))) {
+                    return wifiAddr
+                }
+            }
             val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
             for (intf in interfaces) {
                 if (intf.isLoopback || !intf.isUp) continue

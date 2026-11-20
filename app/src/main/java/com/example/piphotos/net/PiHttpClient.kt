@@ -59,30 +59,16 @@ data class DeviceFoldersResponse(
 class PiHttpClient(
     private val context: Context? = null
 ) {
-    @Volatile
-    private var activeWifiNetwork: Network? = null
-
-    init {
-        context?.let { ctx ->
-            try {
-                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                val request = NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                    .build()
-                cm?.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
-                    override fun onAvailable(network: Network) {
-                        activeWifiNetwork = network
-                    }
-
-                    override fun onLost(network: Network) {
-                        if (activeWifiNetwork == network) {
-                            activeWifiNetwork = null
-                        }
-                    }
-                })
-            } catch (e: Exception) {
-                // Connectivity manager callback registration error
+    fun getActiveWifiNetwork(): Network? {
+        val ctx = context ?: return null
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
+        return try {
+            cm.allNetworks.firstOrNull { net ->
+                val caps = cm.getNetworkCapabilities(net)
+                caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
             }
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -100,8 +86,9 @@ class PiHttpClient(
             .writeTimeout(readTimeoutSec, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
 
-        activeWifiNetwork?.let { wifi ->
-            builder.socketFactory(wifi.socketFactory)
+        val wifiNetwork = getActiveWifiNetwork()
+        if (wifiNetwork != null) {
+            builder.socketFactory(wifiNetwork.socketFactory)
         }
 
         return Pair(builder.build(), trustManager)
@@ -109,7 +96,8 @@ class PiHttpClient(
 
     suspend fun probeTcp(host: String, port: Int, timeoutMs: Int = 2000): Boolean = withContext(Dispatchers.IO) {
         try {
-            val socket = activeWifiNetwork?.socketFactory?.createSocket() ?: Socket()
+            val wifiNetwork = getActiveWifiNetwork()
+            val socket = wifiNetwork?.socketFactory?.createSocket() ?: Socket()
             socket.use { s ->
                 s.connect(InetSocketAddress(host, port), timeoutMs)
                 true
@@ -428,6 +416,17 @@ class PiHttpClient(
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    companion object {
+        @Volatile
+        private var INSTANCE: PiHttpClient? = null
+
+        fun getInstance(context: Context): PiHttpClient {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: PiHttpClient(context.applicationContext).also { INSTANCE = it }
+            }
         }
     }
 }

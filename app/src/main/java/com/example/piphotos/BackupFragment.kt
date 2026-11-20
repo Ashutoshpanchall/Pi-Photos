@@ -465,7 +465,7 @@ class BackupFragment : Fragment() {
     private fun testNodeConnection(pairedNode: com.example.piphotos.sync.PairedNode) {
         val context = context ?: return
         Toast.makeText(context, "Probing ${pairedNode.nodeName}...", Toast.LENGTH_SHORT).show()
-        val client = PiHttpClient(context)
+        val client = PiHttpClient.getInstance(context)
         viewLifecycleOwner.lifecycleScope.launch {
             val res = client.getStatus(
                 endpointUrl = pairedNode.endpointUrl,

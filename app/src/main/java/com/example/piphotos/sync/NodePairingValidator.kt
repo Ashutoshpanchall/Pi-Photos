@@ -63,7 +63,7 @@ sealed class PairingValidationResult {
 
 class NodePairingValidator(
     private val context: Context? = null,
-    private val httpClient: PiHttpClient = PiHttpClient(context)
+    private val httpClient: PiHttpClient = context?.let { PiHttpClient.getInstance(it) } ?: PiHttpClient()
 ) {
 
     suspend fun executeValidation(

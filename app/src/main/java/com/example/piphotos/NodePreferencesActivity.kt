@@ -18,7 +18,7 @@ import java.util.Locale
 class NodePreferencesActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityNodePreferencesBinding
-    private val httpClient by lazy { PiHttpClient(this) }
+    private val httpClient by lazy { PiHttpClient.getInstance(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeManager.applyTheme(this)

@@ -20,7 +20,7 @@ import kotlinx.coroutines.withContext
 
 class ConnectionStateMonitor(
     private val context: Context,
-    private val httpClient: PiHttpClient = PiHttpClient(context)
+    private val httpClient: PiHttpClient = PiHttpClient.getInstance(context)
 ) {
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.NotConfigured)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()

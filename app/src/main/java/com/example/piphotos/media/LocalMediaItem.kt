@@ -15,7 +15,8 @@ data class LocalMediaItem(
     val bucketName: String,
     val durationMs: Long = 0L,
     val sizeBytes: Long = 0L,
-    val generationModified: Long = 0L
+    val generationModified: Long = 0L,
+    val displayName: String? = null
 ) {
     val contentUri: Uri
         get() = if (isVideo) {

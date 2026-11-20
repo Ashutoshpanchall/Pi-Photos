@@ -26,7 +26,8 @@ class MediaStoreScanner(private val context: Context) {
             MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME,
             MediaStore.Files.FileColumns.DURATION,
             MediaStore.Files.FileColumns.SIZE,
-            MediaStore.MediaColumns.GENERATION_MODIFIED
+            MediaStore.MediaColumns.GENERATION_MODIFIED,
+            MediaStore.MediaColumns.DISPLAY_NAME
         )
 
         val ID_PROJECTION = arrayOf(
@@ -58,6 +59,7 @@ class MediaStoreScanner(private val context: Context) {
             val durationCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.DURATION)
             val sizeCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.SIZE)
             val genModifiedCol = cursor.getColumnIndex(MediaStore.MediaColumns.GENERATION_MODIFIED)
+            val displayNameCol = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -80,6 +82,7 @@ class MediaStoreScanner(private val context: Context) {
                 val duration = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
                 val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
                 val generation = if (genModifiedCol >= 0) cursor.getLong(genModifiedCol) else 0L
+                val displayName = if (displayNameCol >= 0) cursor.getString(displayNameCol) else null
 
                 items.add(
                     LocalMediaItem(
@@ -93,7 +96,8 @@ class MediaStoreScanner(private val context: Context) {
                         bucketName = bucketName,
                         durationMs = duration,
                         sizeBytes = size,
-                        generationModified = generation
+                        generationModified = generation,
+                        displayName = displayName
                     )
                 )
             }
