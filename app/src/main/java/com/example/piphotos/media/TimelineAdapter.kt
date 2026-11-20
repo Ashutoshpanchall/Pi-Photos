@@ -38,13 +38,39 @@ class TimelineAdapter(
     var favoriteIds: Set<Long> = emptySet()
     var backedUpIds: Set<Long> = emptySet()
 
+    // O(1) position lookup index for item IDs
+    @Volatile
+    private var idToPositionMap: Map<Long, Int> = emptyMap()
+
+    // O(log H) sorted header positions in currentList for binary search
+    @Volatile
+    var cachedHeaderPositions: IntArray = IntArray(0)
+        private set
+
+    override fun onCurrentListChanged(
+        previousList: MutableList<TimelineRow>,
+        currentList: MutableList<TimelineRow>
+    ) {
+        super.onCurrentListChanged(previousList, currentList)
+        val map = HashMap<Long, Int>(currentList.size)
+        val headers = ArrayList<Int>()
+        for (i in currentList.indices) {
+            when (val row = currentList[i]) {
+                is TimelineRow.MediaRow -> map[row.item.id] = i
+                is TimelineRow.HeaderRow -> headers.add(i)
+            }
+        }
+        idToPositionMap = map
+        cachedHeaderPositions = headers.toIntArray()
+    }
+
     fun updateFavorites(newFavIds: Set<Long>) {
         if (favoriteIds == newFavIds) return
         val changedIds = (favoriteIds - newFavIds) + (newFavIds - favoriteIds)
         favoriteIds = newFavIds
         for (id in changedIds) {
-            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-            if (pos >= 0) {
+            val pos = idToPositionMap[id] ?: continue
+            if (pos in 0 until itemCount) {
                 notifyItemChanged(pos, PAYLOAD_FAVORITE)
             }
         }
@@ -55,8 +81,8 @@ class TimelineAdapter(
         val changedIds = (backedUpIds - newBackedUpIds) + (newBackedUpIds - backedUpIds)
         backedUpIds = newBackedUpIds
         for (id in changedIds) {
-            val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-            if (pos >= 0) {
+            val pos = idToPositionMap[id] ?: continue
+            if (pos in 0 until itemCount) {
                 notifyItemChanged(pos, PAYLOAD_BACKED_UP)
             }
         }
@@ -133,8 +159,8 @@ class TimelineAdapter(
     fun toggleSelection(id: Long) {
         when (val result = selectionState.toggle(id)) {
             is SelectionState.Result.SingleItemToggled -> {
-                val pos = currentList.indexOfFirst { (it as? TimelineRow.MediaRow)?.item?.id == id }
-                if (pos >= 0) notifyItemChanged(pos, PAYLOAD_SELECTION)
+                val pos = idToPositionMap[id] ?: -1
+                if (pos in 0 until itemCount) notifyItemChanged(pos, PAYLOAD_SELECTION)
                 onSelectionChanged(selectionState.selectedIds)
             }
             is SelectionState.Result.SelectionExited -> {

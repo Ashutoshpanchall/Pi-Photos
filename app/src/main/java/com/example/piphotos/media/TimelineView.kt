@@ -12,6 +12,7 @@ import android.widget.FrameLayout
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.piphotos.databinding.ViewTimelineBinding
+import com.example.piphotos.perf.JankTracker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,6 +30,10 @@ class TimelineView @JvmOverloads constructor(
     private val binding = ViewTimelineBinding.inflate(LayoutInflater.from(context), this, true)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var groupingJob: Job? = null
+
+    private var currentScrollState: Int = RecyclerView.SCROLL_STATE_IDLE
+    private val jankTracker = JankTracker.getInstance()
+    private val flingPrefetchThresholdPx = (20 * resources.displayMetrics.density).toInt()
 
     val adapter: TimelineAdapter
     val gridLayoutManager: GridLayoutManager
@@ -149,6 +154,17 @@ class TimelineView @JvmOverloads constructor(
 
     private fun setupScrollListener() {
         binding.rvTimelineGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                super.onScrollStateChanged(recyclerView, newState)
+                currentScrollState = newState
+                val stateName = when (newState) {
+                    RecyclerView.SCROLL_STATE_DRAGGING -> "Dragging"
+                    RecyclerView.SCROLL_STATE_SETTLING -> "Settling"
+                    else -> "Idle"
+                }
+                jankTracker?.setScrollState(stateName)
+            }
+
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 super.onScrolled(recyclerView, dx, dy)
                 if (dy != 0) {
@@ -162,6 +178,12 @@ class TimelineView @JvmOverloads constructor(
     }
 
     private fun prefetchVisibleDirection(dy: Int) {
+        // Skip speculative prefetching during aggressive high-speed flings (SETTLING)
+        // to reserve bandwidth and CPU for decoding frames currently entering the viewport
+        if (currentScrollState == RecyclerView.SCROLL_STATE_SETTLING && kotlin.math.abs(dy) > flingPrefetchThresholdPx) {
+            return
+        }
+
         val list = adapter.currentList
         if (list.isEmpty()) return
 
@@ -219,6 +241,25 @@ class TimelineView @JvmOverloads constructor(
     }
 
     private fun findActiveHeader(visiblePosition: Int): TimelineRow.HeaderRow? {
+        val headers = adapter.cachedHeaderPositions
+        if (headers.isNotEmpty()) {
+            val idx = headers.binarySearch(visiblePosition)
+            val targetIdx = if (idx >= 0) {
+                idx
+            } else {
+                val insertionPoint = -(idx + 1)
+                insertionPoint - 1
+            }
+            if (targetIdx in headers.indices) {
+                val headerPos = headers[targetIdx]
+                val header = adapter.currentList.getOrNull(headerPos) as? TimelineRow.HeaderRow
+                if (header != null) {
+                    return header
+                }
+            }
+        }
+
+        // Fallback for safety if index not ready
         val list = adapter.currentList
         for (i in visiblePosition downTo 0) {
             val row = list.getOrNull(i)
