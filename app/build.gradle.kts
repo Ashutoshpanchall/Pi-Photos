@@ -62,6 +62,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.tracing:tracing:1.2.0")
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
     debugImplementation("androidx.metrics:metrics-performance:1.0.0-beta01")
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
     testImplementation(libs.junit)

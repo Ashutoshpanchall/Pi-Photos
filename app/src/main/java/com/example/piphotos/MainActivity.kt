@@ -126,44 +126,34 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
     private fun setupFragments(savedInstanceState: Bundle?) {
         val fm = supportFragmentManager
-        if (savedInstanceState == null) {
-            timelineFragment = TimelineFragment.newInstance()
-            albumsFragment = AlbumsFragment.newInstance()
-            backupFragment = BackupFragment.newInstance()
-            profileFragment = ProfileFragment.newInstance()
+        timelineFragment = fm.findFragmentByTag(TAG_PHOTOS) ?: TimelineFragment.newInstance()
+        albumsFragment = fm.findFragmentByTag(TAG_FOLDERS) ?: AlbumsFragment.newInstance()
+        backupFragment = fm.findFragmentByTag(TAG_BACKUP) ?: BackupFragment.newInstance()
+        profileFragment = fm.findFragmentByTag(TAG_YOU) ?: ProfileFragment.newInstance()
 
-            fm.beginTransaction()
-                .add(R.id.fragmentContainer, timelineFragment, TAG_PHOTOS)
-                .add(R.id.fragmentContainer, albumsFragment, TAG_FOLDERS).hide(albumsFragment)
-                .add(R.id.fragmentContainer, backupFragment, TAG_BACKUP).hide(backupFragment)
-                .add(R.id.fragmentContainer, profileFragment, TAG_YOU).hide(profileFragment)
-                .commitNow()
-            activeFragment = timelineFragment
-        } else {
-            timelineFragment = fm.findFragmentByTag(TAG_PHOTOS) ?: TimelineFragment.newInstance()
-            albumsFragment = fm.findFragmentByTag(TAG_FOLDERS) ?: AlbumsFragment.newInstance()
-            backupFragment = fm.findFragmentByTag(TAG_BACKUP) ?: BackupFragment.newInstance()
-            profileFragment = fm.findFragmentByTag(TAG_YOU) ?: ProfileFragment.newInstance()
-
-            val target = when (currentTabId) {
-                R.id.navigation_photos -> timelineFragment
-                R.id.navigation_folders -> albumsFragment
-                R.id.navigation_backup -> backupFragment
-                R.id.navigation_you -> profileFragment
-                else -> timelineFragment
-            }
-            activeFragment = target
-
-            val tx = fm.beginTransaction()
-            listOf(timelineFragment, albumsFragment, backupFragment, profileFragment).forEach { f ->
-                if (f == target) {
-                    tx.show(f)
-                } else {
-                    tx.hide(f)
-                }
-            }
-            tx.commitAllowingStateLoss()
+        val (target, tag) = when (currentTabId) {
+            R.id.navigation_photos -> timelineFragment to TAG_PHOTOS
+            R.id.navigation_folders -> albumsFragment to TAG_FOLDERS
+            R.id.navigation_backup -> backupFragment to TAG_BACKUP
+            R.id.navigation_you -> profileFragment to TAG_YOU
+            else -> timelineFragment to TAG_PHOTOS
         }
+        activeFragment = target
+
+        val tx = fm.beginTransaction()
+        // Ensure non-target added fragments are hidden
+        listOf(timelineFragment, albumsFragment, backupFragment, profileFragment).forEach { f ->
+            if (f != target && f.isAdded) {
+                tx.hide(f)
+            }
+        }
+        // Lazy-add or show the target fragment
+        if (!target.isAdded) {
+            tx.add(R.id.fragmentContainer, target, tag)
+        } else {
+            tx.show(target)
+        }
+        tx.commitNow()
     }
 
     private fun setupBackNavigation() {
@@ -232,19 +222,25 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
 
     private fun switchToTab(tabId: Int) {
         currentTabId = tabId
-        val target = when (tabId) {
-            R.id.navigation_photos -> timelineFragment
-            R.id.navigation_folders -> albumsFragment
-            R.id.navigation_backup -> backupFragment
-            R.id.navigation_you -> profileFragment
-            else -> timelineFragment
+        val (target, tag) = when (tabId) {
+            R.id.navigation_photos -> timelineFragment to TAG_PHOTOS
+            R.id.navigation_folders -> albumsFragment to TAG_FOLDERS
+            R.id.navigation_backup -> backupFragment to TAG_BACKUP
+            R.id.navigation_you -> profileFragment to TAG_YOU
+            else -> timelineFragment to TAG_PHOTOS
         }
 
         if (activeFragment == target) return
 
         val tx = supportFragmentManager.beginTransaction()
         activeFragment?.let { tx.hide(it) }
-        tx.show(target).commitAllowingStateLoss()
+
+        if (!target.isAdded) {
+            tx.add(R.id.fragmentContainer, target, tag)
+        } else {
+            tx.show(target)
+        }
+        tx.commitAllowingStateLoss()
         activeFragment = target
     }
 
