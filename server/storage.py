@@ -115,10 +115,10 @@ class StorageManager:
             dt = datetime.fromtimestamp(date_taken, tz=timezone.utc)
             base = base / f"{dt.year:04d}" / f"{dt.month:02d}"
 
-        # Path traversal guard: verify resolved path is within user_dir
+        # Path traversal guard: verify resolved path is within user_dir using is_relative_to
         u_dir = self.user_dir(user_slug).resolve()
         resolved_base = base.resolve()
-        if not str(resolved_base).startswith(str(u_dir)):
+        if not resolved_base.is_relative_to(u_dir):
             raise ValueError(f"Path traversal detected: {folder!r}")
 
         return base
@@ -190,41 +190,63 @@ class StorageManager:
 
     def safe_delete_user_dir(self, user_slug: str) -> None:
         """Safely delete a user's directory without following symlinks and ensuring containment."""
-        user_dir = self.user_dir(user_slug).resolve()
+        raw_user_dir = self.user_dir(user_slug)
         users_root = (self._root / "users").resolve()
 
-        if not str(user_dir).startswith(str(users_root)) or user_dir == users_root:
-            raise ValueError(f"Unsafe user directory deletion path: {user_dir}")
+        # Check symlink on unresolved path before resolve
+        if raw_user_dir.is_symlink() or os.path.islink(raw_user_dir):
+            raise ValueError(f"Refusing to delete symlinked directory: {raw_user_dir}")
 
-        if user_dir.is_symlink():
-            raise ValueError(f"Refusing to delete symlinked directory: {user_dir}")
+        resolved_user_dir = raw_user_dir.resolve()
+        if not resolved_user_dir.is_relative_to(users_root) or resolved_user_dir == users_root:
+            raise ValueError(f"Unsafe user directory deletion path: {resolved_user_dir}")
 
-        if user_dir.exists():
-            shutil.rmtree(user_dir)
+        if resolved_user_dir.is_symlink():
+            raise ValueError(f"Refusing to delete symlinked directory: {resolved_user_dir}")
+
+        if resolved_user_dir.exists():
+            shutil.rmtree(resolved_user_dir)
 
         # Also clean up partial uploads
-        parts_dir = (self._root / "parts" / slugify(user_slug)).resolve()
-        if parts_dir.exists() and not parts_dir.is_symlink():
-            shutil.rmtree(parts_dir)
+        raw_parts_dir = self._root / "parts" / slugify(user_slug)
+        if raw_parts_dir.is_symlink() or os.path.islink(raw_parts_dir):
+            raise ValueError(f"Refusing to delete symlinked parts directory: {raw_parts_dir}")
+        resolved_parts = raw_parts_dir.resolve()
+        if resolved_parts.exists() and not resolved_parts.is_symlink():
+            shutil.rmtree(resolved_parts)
 
     def archive_user_dir(self, user_slug: str) -> Optional[Path]:
         """Move user directory to _removed/<slug>-<timestamp> (preserving files)."""
         import time
-        user_dir = self.user_dir(user_slug).resolve()
+        raw_user_dir = self.user_dir(user_slug)
         users_root = (self._root / "users").resolve()
 
-        if not str(user_dir).startswith(str(users_root)) or user_dir == users_root:
-            raise ValueError(f"Unsafe user directory archive path: {user_dir}")
+        # Check symlink on unresolved path before resolve
+        if raw_user_dir.is_symlink() or os.path.islink(raw_user_dir):
+            raise ValueError(f"Refusing to archive symlinked directory: {raw_user_dir}")
 
-        if user_dir.is_symlink():
-            raise ValueError(f"Refusing to archive symlinked directory: {user_dir}")
+        resolved_user_dir = raw_user_dir.resolve()
+        if not resolved_user_dir.is_relative_to(users_root) or resolved_user_dir == users_root:
+            raise ValueError(f"Unsafe user directory archive path: {resolved_user_dir}")
 
-        if not user_dir.exists():
+        if resolved_user_dir.is_symlink():
+            raise ValueError(f"Refusing to archive symlinked directory: {resolved_user_dir}")
+
+        if not resolved_user_dir.exists():
             return None
 
         ts = int(time.time())
         removed_dir = self._root / "_removed"
         removed_dir.mkdir(parents=True, exist_ok=True)
         dest = removed_dir / f"{slugify(user_slug)}-{ts}"
-        shutil.move(str(user_dir), str(dest))
+        shutil.move(str(resolved_user_dir), str(dest))
+
+        # Also handle parts directory in archive mode
+        raw_parts_dir = self._root / "parts" / slugify(user_slug)
+        if not (raw_parts_dir.is_symlink() or os.path.islink(raw_parts_dir)):
+            resolved_parts = raw_parts_dir.resolve()
+            if resolved_parts.exists() and not resolved_parts.is_symlink():
+                dest_parts = dest / "_parts"
+                shutil.move(str(resolved_parts), str(dest_parts))
+
         return dest

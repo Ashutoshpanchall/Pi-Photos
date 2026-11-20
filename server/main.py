@@ -14,6 +14,7 @@ import os
 import shutil
 import ssl
 import sys
+import time
 import uuid
 import secrets
 from collections import defaultdict
@@ -24,14 +25,16 @@ from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from auth import (
     AuthIdentity,
     IpRateLimiter,
+    GlobalPairingLimiter,
     PairingManager,
     create_bearer_token,
+    generate_invite_code,
     hash_token,
     resolve_bearer,
 )
@@ -44,6 +47,8 @@ from models import (
     DiskInfo,
     ErrorResponse,
     FolderInfo,
+    FileInfo,
+    MeResponse,
     OffsetMismatchDetail,
     PairRequest,
     PairResponse,
@@ -111,6 +116,22 @@ advertiser: Optional[PiPhotosAdvertiser] = None
 server_id: str
 config: dict
 ip_limiter = IpRateLimiter(max_requests=10, window_seconds=60.0)
+global_pairing_limiter = GlobalPairingLimiter()
+
+# In-memory throttle for updating device last_seen_at (max 1 DB write per device per 60 s)
+_device_last_seen_cache: dict[str, float] = {}
+_LAST_SEEN_THROTTLE_SECONDS = 60.0
+
+
+def _throttled_update_device_last_seen(device_id: str) -> bool:
+    """Updates device last_seen_at in DB if at least 60 seconds have passed. Returns True if DB was updated."""
+    now = time.time()
+    last = _device_last_seen_cache.get(device_id, 0.0)
+    if now - last >= _LAST_SEEN_THROTTLE_SECONDS:
+        _device_last_seen_cache[device_id] = now
+        db.update_device_last_seen(device_id)
+        return True
+    return False
 
 # Per-user accounting locks and active uploads tracking
 user_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -139,8 +160,8 @@ def _require_auth(authorization: Optional[str]) -> AuthIdentity:
             "error": "unauthorized",
             "message": "Missing or invalid authentication token",
         })
-    # Update device last_seen_at
-    db.update_device_last_seen(identity.device_id)
+    # Update device last_seen_at (throttled to at most once per 60s)
+    _throttled_update_device_last_seen(identity.device_id)
 
     # Check user exists and active
     user = db.get_user(identity.user_id)
@@ -369,33 +390,47 @@ def _user_to_admin_summary(u: UserRow) -> AdminUserSummary:
 
 @app.post("/api/v1/pair")
 async def pair_device(req: PairRequest, request: Request) -> PairResponse:
+    # Global Rate-Limiting across all IPs (Phase U1.1)
+    is_locked, remaining = global_pairing_limiter.is_locked()
+    if is_locked:
+        logger.warning("Pairing rejected: global limiter active (%d s remaining)", int(remaining))
+        raise HTTPException(status_code=429, detail={
+            "error": "pairing_locked",
+            "message": f"Pairing is temporarily locked across all IPs due to excessive failed attempts. Try again in {int(remaining)} seconds.",
+        })
+
     # IP Rate-Limiting
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = request.headers.get("x-forwarded-for") or (request.client.host if request.client else "unknown")
     if not ip_limiter.is_allowed(client_ip):
         raise HTTPException(status_code=429, detail={
             "error": "rate_limited",
             "message": "Too many pairing attempts from this IP. Please wait before retrying.",
         })
 
-    code_str = req.code.strip()
-    code_h = hash_token(code_str)
+    def _fail_attempt(error_code: str, message: str, status_code: int = 401):
+        pairing.record_failed_attempt()
+        if global_pairing_limiter.record_failure():
+            logger.warning("Global pairing limiter locked pairing for 10 minutes after 20 failures")
+        raise HTTPException(status_code=status_code, detail={
+            "error": error_code,
+            "message": message,
+        })
 
-    # 1. Check if the code matches an invite first
+    code_raw = req.code.strip()
+    code_upper = code_raw.upper()
+    code_h = hash_token(code_upper)
+
+    # 1. Check if the code matches an invite first (case-insensitive for 8-char codes)
     invite = db.get_invite_by_hash(code_h)
+    if invite is None and code_raw != code_upper:
+        invite = db.get_invite_by_hash(hash_token(code_raw))
+
     if invite is not None:
         if invite.used_at is not None:
-            pairing.record_failed_attempt()
-            raise HTTPException(status_code=401, detail={
-                "error": "invite_used",
-                "message": "Invite code has already been used",
-            })
+            _fail_attempt("invite_used", "Invite code has already been used")
         now_iso = datetime.now(timezone.utc).isoformat()
         if invite.expires_at < now_iso:
-            pairing.record_failed_attempt()
-            raise HTTPException(status_code=401, detail={
-                "error": "invite_expired",
-                "message": "Invite code has expired",
-            })
+            _fail_attempt("invite_expired", "Invite code has expired")
 
         user = db.get_user(invite.user_id)
         if user is None or user.status == "disabled" or not user.is_active:
@@ -424,14 +459,12 @@ async def pair_device(req: PairRequest, request: Request) -> PairResponse:
 
     # 2. If not an invite, check owner pairing code
     if not pairing.is_open:
-        pairing.record_failed_attempt()
-        raise HTTPException(status_code=409, detail={
-            "error": "pairing_closed",
-            "message": "Pairing is not currently available. Please request pairing from the server owner.",
-        })
+        _fail_attempt("pairing_closed", "Pairing is not currently available. Please request pairing from the server owner.", status_code=409)
 
-    valid, reason = pairing.validate_code(code_str)
+    valid, reason = pairing.validate_code(code_raw)
     if not valid:
+        if global_pairing_limiter.record_failure():
+            logger.warning("Global pairing limiter locked pairing for 10 minutes after 20 failures")
         if reason == "too_many_attempts":
             raise HTTPException(status_code=401, detail={
                 "error": "code_invalidated",
@@ -628,9 +661,17 @@ async def upload_file(
     user_slug = user.slug
 
     # Check if this content is already stored for this user (deduplication)
-    # If so, create a duplicate reference record for this device/folder/name without second disk copy.
+    # If so, create a real file via os.link() (or fallback copy/db_only) and record in DB
     existing_file = db.get_first_file_by_hash(identity.user_id, sha256)
     if existing_file:
+        existing_dev = db.get_device(existing_file.device_id)
+        existing_dir = storage.folder_dir(
+            user_slug, existing_dev.slug if existing_dev else "unknown", existing_file.folder,
+            date_taken=existing_file.date_taken,
+            organise_by_date=user.organise_by_date,
+        )
+        existing_path = existing_dir / existing_file.relative_path
+
         target_dir = storage.folder_dir(
             user_slug, dev.slug, folder,
             date_taken=taken,
@@ -638,6 +679,24 @@ async def upload_file(
         )
         target_dir.mkdir(parents=True, exist_ok=True)
         resolved_name = storage.resolve_filename(target_dir, name, sha256)
+        target_path = target_dir / resolved_name
+
+        link_method = "none"
+        if existing_path.exists() and not target_path.exists():
+            try:
+                os.link(str(existing_path), str(target_path))
+                link_method = "hardlink"
+            except Exception:
+                try:
+                    shutil.copy2(str(existing_path), str(target_path))
+                    link_method = "copy"
+                except Exception:
+                    link_method = "db_only"
+        elif target_path.exists():
+            link_method = "existing"
+
+        if target_path.exists() and taken:
+            storage.set_mtime(target_path, taken)
 
         db.insert_file(
             user_id=identity.user_id,
@@ -648,6 +707,7 @@ async def upload_file(
             size=existing_file.size,
             date_taken=taken,
         )
+        logger.info("Duplicate upload for sha %s resolved via %s", sha256, link_method)
         return UploadResult(sha256=sha256, size=existing_file.size, path=f"{folder}/{resolved_name}")
 
     # Concurrency control: reject concurrent upload of the same hash for this user
@@ -702,10 +762,23 @@ async def upload_file(
                 hasher = hashlib.sha256()
 
             # Stream body to .part file, checking running quota/disk reserve dynamically
+            chunk_timeout = float(os.environ.get("PIPHOTOS_CHUNK_TIMEOUT", "30.0"))
             part_file = open(part_path, mode)
             bytes_written_this_request = 0
+            stream_iter = request.stream().__aiter__()
             try:
-                async for chunk in request.stream():
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=chunk_timeout)
+                    except StopAsyncIteration:
+                        break
+                    except (asyncio.TimeoutError, TimeoutError):
+                        logger.warning("Upload chunk read timed out after %s s", chunk_timeout)
+                        raise HTTPException(status_code=408, detail={
+                            "error": "timeout",
+                            "message": "Upload stream chunk read timed out",
+                        })
+
                     if not chunk:
                         continue
                     chunk_len = len(chunk)
@@ -814,6 +887,137 @@ async def get_device_folders(
 
 
 # ---------------------------------------------------------------------------
+# Current User and Files Endpoints (Phase U1.1)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/me")
+async def get_me(authorization: Optional[str] = Header(None)) -> MeResponse:
+    identity = _require_auth(authorization)
+    user = db.get_user(identity.user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail={"error": "unauthorized", "message": "User not found"})
+    dev = db.get_device(identity.device_id)
+    used = db.user_storage_used(identity.user_id)
+
+    return MeResponse(
+        user_id=user.id,
+        display_name=user.display_name or user.name,
+        role=user.role,
+        quota_bytes=user.quota_bytes,
+        used_bytes=used,
+        device_id=dev.id if dev else "",
+        device_name=dev.name if dev else "",
+    )
+
+
+@app.get("/api/v1/files")
+async def list_files(
+    device_id: Optional[str] = Query(None),
+    folder: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+) -> list[FileInfo]:
+    identity = _require_auth(authorization)
+    files = db.list_files_filtered(identity.user_id, device_id=device_id, folder=folder)
+    return [
+        FileInfo(
+            id=f.id,
+            name=f.relative_path,
+            size=f.size,
+            sha256=f.sha256,
+            date_taken=f.date_taken,
+            device_id=f.device_id,
+            folder=f.folder,
+        )
+        for f in files
+    ]
+
+
+@app.get("/api/v1/files/{file_id}/content")
+async def get_file_content(
+    file_id: int,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> Response:
+    identity = _require_auth(authorization)
+    file_row = db.get_file(file_id)
+    if file_row is None or file_row.user_id != identity.user_id:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "File not found"})
+
+    user = db.get_user(identity.user_id)
+    if user is None:
+        raise HTTPException(status_code=401)
+    dev = db.get_device(file_row.device_id)
+    folder_dir = storage.folder_dir(
+        user.slug, dev.slug if dev else "unknown", file_row.folder,
+        date_taken=file_row.date_taken,
+        organise_by_date=user.organise_by_date,
+    )
+    file_path = folder_dir / file_row.relative_path
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "File content not found on disk"})
+
+    file_size = file_path.stat().st_size
+    range_header = request.headers.get("Range")
+
+    if range_header and range_header.startswith("bytes="):
+        try:
+            byte_range = range_header.split("bytes=", 1)[1].strip()
+            parts = byte_range.split("-")
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+            if start >= file_size or end >= file_size or start > end:
+                return Response(
+                    status_code=416,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+            length = end - start + 1
+
+            def iter_range():
+                with open(file_path, "rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk_to_read = min(CHUNK_SIZE, remaining)
+                        data = f.read(chunk_to_read)
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+
+            return StreamingResponse(
+                iter_range(),
+                status_code=206,
+                headers={
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(length),
+                    "Content-Type": "application/octet-stream",
+                },
+            )
+        except Exception:
+            pass
+
+    def iter_full():
+        with open(file_path, "rb") as f:
+            while True:
+                data = f.read(CHUNK_SIZE)
+                if not data:
+                    break
+                yield data
+
+    return StreamingResponse(
+        iter_full(),
+        status_code=200,
+        headers={
+            "Content-Length": str(file_size),
+            "Accept-Ranges": "bytes",
+            "Content-Type": "application/octet-stream",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Owner-Only Admin Endpoints (/api/v1/admin/*)
 # ---------------------------------------------------------------------------
 
@@ -848,20 +1052,27 @@ async def create_admin_user(
         existing = db.get_user_by_slug(slug)
         suffix += 1
 
+    if req.unlimited:
+        effective_quota = 0
+    elif req.quota_bytes is not None:
+        effective_quota = req.quota_bytes
+    else:
+        effective_quota = config.get("default_quota", 100 * 1024**3)
+
     new_user = db.create_user(
         name=display_name,
         role="member",
-        quota_bytes=req.quota_bytes,
+        quota_bytes=effective_quota,
         display_name=display_name,
         slug=slug,
         status="active",
     )
 
-    code = f"{secrets.randbelow(1_000_000):06d}"
+    code = generate_invite_code(8)
     code_h = hash_token(code)
     expires_dt = datetime.now(timezone.utc) + timedelta(hours=24)
     expires_at = expires_dt.isoformat()
-    db.create_invite(new_user.id, code_h, created_by=identity.user_id, expires_at=expires_at, quota_bytes=req.quota_bytes)
+    db.create_invite(new_user.id, code_h, created_by=identity.user_id, expires_at=expires_at, quota_bytes=effective_quota)
 
     ips = get_local_ipv4_addresses()
     local_ip = ips[0] if ips else "127.0.0.1"
@@ -945,8 +1156,8 @@ async def reissue_admin_user_invite(
     # Invalidate existing unused invites
     db.invalidate_user_invites(user_id)
 
-    # Issue new invite
-    code = f"{secrets.randbelow(1_000_000):06d}"
+    # Issue new 8-char invite
+    code = generate_invite_code(8)
     code_h = hash_token(code)
     expires_dt = datetime.now(timezone.utc) + timedelta(hours=24)
     expires_at = expires_dt.isoformat()
@@ -984,13 +1195,25 @@ async def delete_admin_user(
         })
 
     user_slug = target.slug
-    if delete_files:
-        storage.safe_delete_user_dir(user_slug)
-    else:
-        storage.archive_user_dir(user_slug)
 
+    # 1. DB delete first in transaction
     db.delete_user(user_id)
-    return {"status": "deleted", "user_id": user_id, "files_deleted": delete_files}
+
+    # 2. File delete / archive, reporting file errors loudly
+    file_warning = None
+    try:
+        if delete_files:
+            storage.safe_delete_user_dir(user_slug)
+        else:
+            storage.archive_user_dir(user_slug)
+    except Exception as e:
+        logger.error("Failed to delete/archive files for user %s (%s): %s", user_id, user_slug, e, exc_info=True)
+        file_warning = str(e)
+
+    res = {"status": "deleted", "user_id": user_id, "files_deleted": delete_files}
+    if file_warning:
+        res["file_warning"] = file_warning
+    return res
 
 
 @app.get("/api/v1/admin/users/{user_id}/devices")

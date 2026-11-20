@@ -65,8 +65,17 @@ As owner, call:
 POST /api/v1/admin/users
 { "display_name": "Alice", "quota_bytes": 107374182400 }
 ```
+Omitting `quota_bytes` applies the default quota (100 GB). Passing `{"unlimited": true}` grants unlimited quota (0).
 
-The response includes a 6-digit **invite code** (valid 24 h) and a `piphotos://pair?…` QR payload. Share the invite code or QR with the new user; they pair exactly like the owner does on initial setup.
+The response includes an 8-character unambiguous **invite code** (valid 24 h, single-use, alphabet `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`) and a `piphotos://pair?…` QR payload. Share the invite code or QR with the new user; they pair exactly like the owner does on initial setup.
+
+### User & File Endpoints
+
+| Action | Endpoint |
+|--------|----------|
+| Caller profile & role | `GET /api/v1/me` |
+| List user's files | `GET /api/v1/files?device_id=&folder=` |
+| Stream file content | `GET /api/v1/files/{file_id}/content` |
 
 ### User Management via API
 

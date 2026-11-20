@@ -166,6 +166,63 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Unambiguous alphabet and Invite code generator (Phase U1.1)
+# ---------------------------------------------------------------------------
+
+UNAMBIGUOUS_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+def generate_invite_code(length: int = 8) -> str:
+    """Generate an unambiguous alphanumeric invite code (no 0, O, 1, I)."""
+    return "".join(secrets.choice(UNAMBIGUOUS_ALPHABET) for _ in range(length))
+
+
+# ---------------------------------------------------------------------------
+# Global Pairing Limiter across all IPs (Phase U1.1)
+# ---------------------------------------------------------------------------
+
+class GlobalPairingLimiter:
+    """Global failed-attempt rate limiter across all IPs for /pair.
+
+    After 20 failures in 10 minutes (600 s), all pairing is rejected
+    for 10 minutes.
+    """
+    MAX_FAILURES = 20
+    WINDOW_SECONDS = 600.0
+    LOCKOUT_DURATION_SECONDS = 600.0
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._failures: list[float] = []
+        self._locked_until: float = 0.0
+
+    def is_locked(self) -> tuple[bool, float]:
+        """Returns (is_locked, seconds_remaining)."""
+        with self._lock:
+            now = time.time()
+            if now < self._locked_until:
+                return True, self._locked_until - now
+            return False, 0.0
+
+    def record_failure(self) -> bool:
+        """Record a pairing failure across any IP. Returns True if this triggered a lockout."""
+        with self._lock:
+            now = time.time()
+            self._failures = [t for t in self._failures if now - t < self.WINDOW_SECONDS]
+            self._failures.append(now)
+            if len(self._failures) >= self.MAX_FAILURES:
+                self._locked_until = now + self.LOCKOUT_DURATION_SECONDS
+                self._failures.clear()
+                return True
+            return False
+
+    def reset(self) -> None:
+        with self._lock:
+            self._failures.clear()
+            self._locked_until = 0.0
+
+
 def resolve_bearer(db: Database, authorization: Optional[str]) -> Optional[AuthIdentity]:
     """Extract and validate a Bearer token from the Authorization header."""
     if not authorization:

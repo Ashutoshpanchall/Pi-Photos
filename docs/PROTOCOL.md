@@ -85,20 +85,21 @@ Returns server identity and pairing availability.
 
 Pairs a device with the server. Accepts **two types of codes**:
 
-1. **Owner startup code** — printed in the server console on startup, pairs the device to the owner account.
-2. **Member invite code** — issued by the owner via `POST /api/v1/admin/users` or `POST /api/v1/admin/users/{id}/invite`, ties the device to that specific member account.
+1. **Owner pairing code** — 6 digits, printed in the server console on startup (or via `POST /api/v1/admin/pairing/open`), pairs the device to the owner account (expires in 10 minutes).
+2. **Member invite code** — 8 uppercase alphanumeric characters from an unambiguous alphabet (`23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, excluding `0`, `O`, `1`, `I`), issued by the owner via `POST /api/v1/admin/users` or `POST /api/v1/admin/users/{id}/invite`. Case-insensitive, single-use, 24-hour expiry.
 
 **Rules:**
-- 6-digit code displayed in server console; owner code expires after 10 minutes.
-- Invite codes expire after 24 hours and are single-use.
+- 6-digit owner code expires after 10 minutes; 8-character member invite code expires after 24 hours.
 - Rate-limited per client IP (HTTP 429 if exceeded).
-- Invalidation after 5 failed code attempts (HTTP 401 `code_invalidated`).
+- Global failed-attempt limiter: 20 failed pairing attempts across all IPs within a 10-minute sliding window temporarily locks all pairing globally for 10 minutes (HTTP 429 `pairing_locked`).
+- Invalidation after 5 failed code attempts on the active owner code (HTTP 401 `code_invalidated`).
+- Device slug uniqueness: if a device with the same slug already exists for the user, `-2`, `-3`, etc., is automatically appended.
 - Owner pairing closes immediately upon 1 successful pairing. Opens only upon explicit owner action (`POST /api/v1/admin/pairing/open`).
 
 **Request:**
 ```json
 {
-  "code": "123456",
+  "code": "A3K9X7YW",
   "device_name": "Moto Edge 50 Neo",
   "device_model": "motorola edge 50 neo"
 }
@@ -125,7 +126,9 @@ Pairs a device with the server. Accepts **two types of codes**:
 
 **Error 409:** Pairing is closed.
 
-**Error 429:** Rate limited (too many pairing attempts from this IP).
+**Error 429 `rate_limited`:** Too many pairing attempts from this IP.
+
+**Error 429 `pairing_locked`:** Pairing is temporarily locked across all IPs due to excessive failed attempts.
 
 ### GET /api/v1/status
 
@@ -337,6 +340,8 @@ File modification time (`mtime`) is set to `date_taken` when provided.
 | 409  | `upload_in_progress`   | Upload for this hash already in progress   |
 | 409  | `pairing_closed`       | Pairing is currently disabled              |
 | 429  | `rate_limited`         | Too many requests from this IP             |
+| 429  | `pairing_locked`       | Global lockout across all IPs (20 failures)|
+| 408  | `timeout`              | Upload stream chunk read timeout (30s)     |
 | 507  | `quota_exceeded`       | User quota or disk reserve exceeded        |
 | 500  | `internal_error`       | Unexpected server error                    |
 
@@ -345,6 +350,64 @@ File modification time (`mtime`) is set to `date_taken` when provided.
 | 403  | `user_disabled`        | User account has been disabled              |
 | 400  | `quota_below_usage`    | Cannot set quota below current usage        |
 | 400  | `last_owner_protected` | Cannot disable, delete, or demote last owner|
+
+---
+
+## User Context & File Endpoints (Any Authenticated User)
+
+### GET /api/v1/me
+
+**Auth:** Required
+
+Returns the caller's profile and current device info. Used by the mobile app to cache role and quota limits.
+
+**Response 200:**
+```json
+{
+  "user_id": "usr_abc123",
+  "display_name": "Alice",
+  "role": "owner",
+  "quota_bytes": 107374182400,
+  "used_bytes": 15420000000,
+  "device_id": "dev_xyz789",
+  "device_name": "Alice Pixel 7"
+}
+```
+
+### GET /api/v1/files
+
+**Auth:** Required
+
+List files uploaded by the authenticated user, optionally filtered by device or folder bucket.
+
+**Query Parameters:**
+- `device_id` (optional): Filter by device ID
+- `folder` (optional): Filter by folder name (e.g. `Camera`)
+
+**Response 200:**
+```json
+[
+  {
+    "id": 1,
+    "user_id": "usr_abc123",
+    "device_id": "dev_xyz789",
+    "folder": "Camera",
+    "relative_path": "IMG_20261120.jpg",
+    "sha256": "3a7b...",
+    "size": 3145728,
+    "date_taken": 1732089600,
+    "uploaded_at": "2026-11-20T08:00:00+00:00"
+  }
+]
+```
+
+### GET /api/v1/files/{file_id}/content
+
+**Auth:** Required
+
+Stream the file content for `file_id`. Supports HTTP `Range` requests (for partial downloads and media seeking). Scoped strictly to the calling user — querying another user's `file_id` returns 404.
+
+**Response 200 / 206 Partial Content:** Binary stream with `Accept-Ranges: bytes` and `Content-Length`.
 
 ---
 
@@ -386,21 +449,23 @@ Create a new member and issue a one-time invite code.
 ```json
 {
   "display_name": "Alice",
-  "quota_bytes": 107374182400
+  "quota_bytes": 107374182400,
+  "unlimited": false
 }
 ```
+If `quota_bytes` is omitted, it defaults to the server's configured default quota (100 GB). Passing `unlimited: true` explicitly configures unlimited quota (`0`).
 
 **Response 200:**
 ```json
 {
   "user": { "id": "usr_xyz", "display_name": "Alice", "role": "member", "status": "active" },
-  "invite_code": "482913",
+  "invite_code": "K3N8Y7WD",
   "expires_at": "2026-11-21T07:00:00+00:00",
-  "qr_payload": "piphotos://pair?host=192.168.1.42&port=8443&tls_fp=AB:CD:...&code=482913"
+  "qr_payload": "piphotos://pair?host=192.168.1.42&port=8443&tls_fp=AB:CD:...&code=K3N8Y7WD"
 }
 ```
 
-The invite code is 6 digits, expires in 24 hours, stored hashed, and is single-use.
+The invite code is 8 characters from an unambiguous alphabet (`23456789ABCDEFGHJKLMNPQRSTUVWXYZ`), expires in 24 hours, stored hashed, and is single-use.
 
 ### PATCH /api/v1/admin/users/{id}
 

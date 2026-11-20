@@ -152,10 +152,10 @@ CREATE TABLE IF NOT EXISTS tokens (
 
 CREATE TABLE IF NOT EXISTS invites (
     id          TEXT PRIMARY KEY,
-    token_hash  TEXT NOT NULL UNIQUE,
+    token_hash  TEXT NOT NULL,
     role        TEXT NOT NULL DEFAULT 'member',
     quota_bytes INTEGER NOT NULL DEFAULT 0,
-    created_by  TEXT NOT NULL REFERENCES users(id),
+    created_by  TEXT REFERENCES users(id),
     expires_at  TEXT NOT NULL,
     redeemed_by TEXT,
     created_at  TEXT NOT NULL
@@ -216,6 +216,32 @@ class Database:
                 pass
             try:
                 cur.execute("ALTER TABLE invites ADD COLUMN used_at TEXT")
+            except Exception:
+                pass
+
+            # Allow created_by to be NULL when creating user is deleted
+            try:
+                cur.execute("PRAGMA table_info(invites)")
+                info = {r["name"]: r["notnull"] for r in cur.fetchall()}
+                if info.get("created_by") == 1:
+                    cur.execute("""
+                        CREATE TABLE invites_temp (
+                            id          TEXT PRIMARY KEY,
+                            user_id     TEXT,
+                            code_hash   TEXT,
+                            token_hash  TEXT,
+                            role        TEXT NOT NULL DEFAULT 'member',
+                            quota_bytes INTEGER NOT NULL DEFAULT 0,
+                            created_by  TEXT REFERENCES users(id),
+                            expires_at  TEXT NOT NULL,
+                            used_at     TEXT,
+                            redeemed_by TEXT,
+                            created_at  TEXT NOT NULL
+                        )
+                    """)
+                    cur.execute("INSERT INTO invites_temp SELECT id, user_id, code_hash, token_hash, role, quota_bytes, created_by, expires_at, used_at, redeemed_by, created_at FROM invites")
+                    cur.execute("DROP TABLE invites")
+                    cur.execute("ALTER TABLE invites_temp RENAME TO invites")
             except Exception:
                 pass
 
@@ -389,7 +415,8 @@ class Database:
             cur.execute("DELETE FROM files WHERE user_id = ?", (user_id,))
             cur.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
             cur.execute("DELETE FROM devices WHERE user_id = ?", (user_id,))
-            cur.execute("DELETE FROM invites WHERE user_id = ? OR created_by = ?", (user_id, user_id))
+            cur.execute("DELETE FROM invites WHERE user_id = ?", (user_id,))
+            cur.execute("UPDATE invites SET created_by = NULL WHERE created_by = ?", (user_id,))
             cur.execute("DELETE FROM partial_uploads WHERE user_id = ?", (user_id,))
             cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
@@ -413,13 +440,22 @@ class Database:
     ) -> DeviceRow:
         did = f"dev_{uuid.uuid4().hex[:12]}"
         now = self._now()
+        base_slug = slug
         with self._cursor() as cur:
+            cur.execute("SELECT slug FROM devices WHERE user_id = ?", (user_id,))
+            existing = {r[0] for r in cur.fetchall()}
+            final_slug = base_slug
+            suffix = 2
+            while final_slug in existing:
+                final_slug = f"{base_slug}-{suffix}"
+                suffix += 1
+
             cur.execute(
                 "INSERT INTO devices (id, user_id, name, model, slug, created_at, last_seen_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (did, user_id, name, model, slug, now, now),
+                (did, user_id, name, model, final_slug, now, now),
             )
-        return DeviceRow(did, user_id, name, model, slug, now, now)
+        return DeviceRow(did, user_id, name, model, final_slug, now, now)
 
     def get_device(self, device_id: str) -> Optional[DeviceRow]:
         with self._cursor() as cur:
@@ -510,6 +546,44 @@ class Database:
                 row["relative_path"], row["sha256"], row["size"],
                 row["date_taken"], row["uploaded_at"],
             )
+
+    def get_file(self, file_id: int) -> Optional[FileRow]:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM files WHERE id = ?", (file_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return FileRow(
+                row["id"], row["user_id"], row["device_id"], row["folder"],
+                row["relative_path"], row["sha256"], row["size"],
+                row["date_taken"], row["uploaded_at"],
+            )
+
+    def list_files_filtered(
+        self,
+        user_id: str,
+        device_id: Optional[str] = None,
+        folder: Optional[str] = None,
+    ) -> list[FileRow]:
+        query = "SELECT * FROM files WHERE user_id = ?"
+        params: list[object] = [user_id]
+        if device_id:
+            query += " AND device_id = ?"
+            params.append(device_id)
+        if folder:
+            query += " AND folder = ?"
+            params.append(folder)
+        query += " ORDER BY id DESC"
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return [
+                FileRow(
+                    r["id"], r["user_id"], r["device_id"], r["folder"],
+                    r["relative_path"], r["sha256"], r["size"],
+                    r["date_taken"], r["uploaded_at"],
+                )
+                for r in cur.fetchall()
+            ]
 
     def check_hashes_exist(self, user_id: str, hashes: list[str]) -> list[str]:
         if not hashes:

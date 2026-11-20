@@ -22,9 +22,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from auth import (
     AuthIdentity,
     IpRateLimiter,
+    GlobalPairingLimiter,
     PairingManager,
     create_bearer_token,
+    generate_invite_code,
     hash_token,
+    UNAMBIGUOUS_ALPHABET,
 )
 from database import Database
 from discovery import PiPhotosAdvertiser, SERVICE_TYPE
@@ -130,6 +133,48 @@ class TestDatabase:
         partials = self.db.get_partial_offsets(user.id, [sha1, sha2, sha3])
         assert partials == {sha3: 1024}
 
+    def test_lookup_missing_token(self):
+        assert self.db.lookup_token("nonexistent_hash") is None
+
+    def test_folder_stats(self):
+        user = self.db.create_user("Alice", "owner", 1024 * 1024)
+        dev = self.db.create_device(user.id, "Phone", "model", "phone")
+        self.db.insert_file(user.id, dev.id, "Camera", "1.jpg", "h1"*32, 100, 1000)
+        self.db.insert_file(user.id, dev.id, "Camera", "2.jpg", "h2"*32, 200, 2000)
+        self.db.insert_file(user.id, dev.id, "Screenshots", "3.png", "h3"*32, 300, 3000)
+
+        stats = {s.folder: (s.item_count, s.total_bytes) for s in self.db.device_folder_stats(user.id, dev.id)}
+        assert stats["Camera"] == (2, 300)
+        assert stats["Screenshots"] == (1, 300)
+
+    def test_audit_log(self):
+        user = self.db.create_user("Alice", "owner", 1024)
+        self.db.audit(user.id, "test_action", "target_123", "detail_msg")
+
+    def test_create_device_slug_uniqueness(self):
+        user = self.db.create_user("Alice", "owner", 1024)
+        d1 = self.db.create_device(user.id, "Pixel 7", "google pixel 7", "pixel-7")
+        d2 = self.db.create_device(user.id, "Pixel 7", "google pixel 7", "pixel-7")
+        d3 = self.db.create_device(user.id, "Pixel 7", "google pixel 7", "pixel-7")
+        assert d1.slug == "pixel-7"
+        assert d2.slug == "pixel-7-2"
+        assert d3.slug == "pixel-7-3"
+
+    def test_delete_user_preserves_other_invites(self):
+        owner = self.db.create_user("Owner", "owner", 0)
+        member = self.db.create_user("Member", "member", 1000)
+        inv = self.db.create_invite(member.id, "code_hash_123", created_by=owner.id, expires_at="2099-01-01T00:00:00")
+        assert inv.created_by == owner.id
+
+        # Delete owner
+        self.db.delete_user(owner.id)
+
+        # Invite for member still exists, but created_by is None
+        found_inv = self.db.get_invite_by_hash("code_hash_123")
+        assert found_inv is not None
+        assert found_inv.created_by is None
+        assert found_inv.user_id == member.id
+
 
 # ---------------------------------------------------------------------------
 # Auth and Rate Limiting tests
@@ -186,6 +231,130 @@ class TestPairingManagerSecurity:
         assert pm.is_open is False
 
 
+    def test_wrong_code(self):
+        pm = PairingManager()
+        pm.generate_code()
+        valid, reason = pm.validate_code("000000")
+        assert valid is False
+        assert reason == "invalid_code"
+
+    def test_disabled(self):
+        pm = PairingManager()
+        code = pm.generate_code()
+        pm.set_enabled(False)
+        valid, reason = pm.validate_code(code)
+        assert valid is False
+        assert reason == "pairing_closed"
+
+    def test_single_use(self):
+        pm = PairingManager()
+        code = pm.generate_code()
+        assert pm.validate_code(code)[0] is True
+        assert pm.validate_code(code)[0] is False
+
+
+class TestGlobalPairingLimiter:
+    """Tests for global failed pairing attempt rate limiter."""
+
+    def test_limiter_locks_after_twenty_failures(self):
+        limiter = GlobalPairingLimiter()
+        assert limiter.is_locked()[0] is False
+
+        # 19 failures -> not locked
+        for _ in range(19):
+            locked = limiter.record_failure()
+            assert locked is False
+            assert limiter.is_locked()[0] is False
+
+        # 20th failure -> triggers lockout
+        triggered = limiter.record_failure()
+        assert triggered is True
+        is_locked, remaining = limiter.is_locked()
+        assert is_locked is True
+        assert remaining > 0
+
+
+class TestTokenGeneration:
+    """Tests for token and invite code generation."""
+
+    def test_bearer_token_uniqueness(self):
+        tokens = {create_bearer_token() for _ in range(100)}
+        assert len(tokens) == 100
+
+    def test_hash_deterministic(self):
+        h1 = hash_token("test-token-123")
+        h2 = hash_token("test-token-123")
+        assert h1 == h2
+        assert len(h1) == 64
+
+    def test_unambiguous_invite_code(self):
+        codes = [generate_invite_code(8) for _ in range(50)]
+        for c in codes:
+            assert len(c) == 8
+            # No ambiguous characters: 0, O, 1, I
+            assert "0" not in c
+            assert "O" not in c
+            assert "1" not in c
+            assert "I" not in c
+            assert all(char in UNAMBIGUOUS_ALPHABET for char in c)
+
+
+class TestSlugify:
+    """Tests for filesystem slug generation."""
+
+    def test_basic(self):
+        assert slugify("Pixel 7 Pro") == "pixel-7-pro"
+
+    def test_special_chars(self):
+        assert slugify("Bob's Phone #1!") == "bob-s-phone-1"
+
+    def test_unicode(self):
+        assert slugify("München") == "munchen" or len(slugify("München")) > 0
+
+    def test_empty(self):
+        assert slugify("   ") == "unnamed"
+
+    def test_max_length(self):
+        long_name = "a" * 300
+        assert len(slugify(long_name)) <= 200
+
+
+class TestSanitiseComponent:
+    """Tests for path component sanitisation."""
+
+    def test_normal(self):
+        assert sanitise_component("Camera") == "Camera"
+
+    def test_dotdot_rejected(self):
+        with pytest.raises(ValueError):
+            sanitise_component("..")
+
+    def test_empty_rejected(self):
+        with pytest.raises(ValueError):
+            sanitise_component("")
+
+    def test_special_chars_replaced(self):
+        assert sanitise_component("folder:name") == "folder_name"
+
+    def test_control_chars_replaced(self):
+        assert sanitise_component("folder\x00name") == "folder_name"
+
+
+class TestSanitiseFilename:
+    """Tests for filename sanitisation."""
+
+    def test_normal(self):
+        assert sanitise_filename("photo.jpg") == "photo.jpg"
+
+    def test_path_separator_rejected(self):
+        with pytest.raises(ValueError):
+            sanitise_filename("dir/photo.jpg")
+
+    def test_empty_rejected(self):
+        with pytest.raises(ValueError):
+            sanitise_filename("")
+
+
 class TestIpRateLimiter:
     """Tests for IP rate limiting."""
 
@@ -219,11 +388,60 @@ class TestStorageManager:
         assert "alice" in str(path)
         assert "users" in str(path)
 
+    def test_device_dir(self):
+        path = self.sm.device_dir("Alice", "Pixel 7")
+        assert "pixel-7" in str(path)
+
+    def test_folder_dir(self):
+        path = self.sm.folder_dir("Alice", "Pixel 7", "Camera")
+        assert "Camera" in str(path)
+
     def test_folder_dir_with_date(self):
         ts = 1768435200  # 2026-01-15 UTC
         path = self.sm.folder_dir("Alice", "Pixel 7", "Camera", date_taken=ts, organise_by_date=True)
         assert "2026" in str(path)
         assert "01" in str(path)
+
+    def test_resolve_filename_no_collision(self):
+        d = Path(self.tmp) / "test_no_coll"
+        d.mkdir()
+        res = self.sm.resolve_filename(d, "new_photo.jpg", "sha")
+        assert res == "new_photo.jpg"
+
+    def test_part_file_path(self):
+        part = self.sm.part_file_path("Alice", "sha123")
+        assert "sha123.part" in str(part)
+        assert "parts" in str(part)
+
+    def test_atomic_move(self):
+        src = Path(self.tmp) / "src.bin"
+        src.write_bytes(b"data")
+        dst = Path(self.tmp) / "sub" / "dst.bin"
+        self.sm.atomic_move(src, dst)
+        assert not src.exists()
+        assert dst.read_bytes() == b"data"
+
+    def test_symlink_pointing_at_other_user_refused_on_delete_and_archive(self):
+        users_dir = Path(self.tmp) / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        victim_dir = users_dir / "victim"
+        victim_dir.mkdir()
+        (victim_dir / "secret.txt").write_text("secret")
+
+        attacker_link = users_dir / "attacker"
+        try:
+            attacker_link.symlink_to(victim_dir, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks not supported in this environment")
+
+        with pytest.raises(ValueError, match="Refusing to delete symlinked"):
+            self.sm.safe_delete_user_dir("attacker")
+
+        with pytest.raises(ValueError, match="Refusing to archive symlinked"):
+            self.sm.archive_user_dir("attacker")
+
+        # Victim's data must remain completely untouched
+        assert (victim_dir / "secret.txt").read_text() == "secret"
 
     def test_set_mtime(self):
         f = Path(self.tmp) / "test.txt"
@@ -376,6 +594,41 @@ class TestAPI:
         assert "id" in data
         assert "name" in data
         assert data["protocol_version"] == 1
+
+    def test_pair_no_code(self):
+        resp = self.client.post("/api/v1/pair", json={"code": "", "device_name": "Test", "device_model": "test"})
+        assert resp.status_code in (400, 401, 409, 422)
+
+    def test_status_no_auth(self):
+        resp = self.client.get("/api/v1/status")
+        assert resp.status_code == 401
+
+    def test_check_upload_no_auth(self):
+        resp = self.client.head(f"/api/v1/upload/{'a'*64}")
+        assert resp.status_code == 401
+
+    def test_invalid_sha_format(self):
+        from main import pairing
+        code = pairing.generate_code()
+        pair_resp = self.client.post("/api/v1/pair", json={"code": code, "device_name": "Phone", "device_model": "model"})
+        headers = {"Authorization": f"Bearer {pair_resp.json()['token']}"}
+        resp = self.client.head("/api/v1/upload/invalid_sha", headers=headers)
+        assert resp.status_code == 400
+
+    def test_upload_hash_mismatch(self):
+        from main import pairing
+        code = pairing.generate_code()
+        pair_resp = self.client.post("/api/v1/pair", json={"code": code, "device_name": "Phone", "device_model": "model"})
+        headers = {"Authorization": f"Bearer {pair_resp.json()['token']}"}
+        dev_id = pair_resp.json()["device_id"]
+        resp = self.client.put(
+            f"/api/v1/upload/{'0'*64}",
+            params={"device": dev_id, "folder": "Camera", "name": "bad.jpg"},
+            headers={**headers, "Content-Length": "4"},
+            content=b"test",
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error"] == "hash_mismatch"
 
     def test_pair_rate_limiting(self):
         from main import pairing
@@ -649,7 +902,7 @@ class TestUserManager:
         assert data["user"]["display_name"] == "Bob Member"
         assert data["user"]["role"] == "member"
         invite_code = data["invite_code"]
-        assert len(invite_code) == 6
+        assert len(invite_code) == 8
         assert "piphotos://pair" in data["qr_payload"]
         bob_id = data["user"]["id"]
 
@@ -949,3 +1202,243 @@ class TestUserManager:
         assert "disk" in od
         assert "allocated_quota_total" in od
         assert len(od["users"]) >= 1
+
+    def test_duplicate_upload_creates_hardlink_and_shares_quota(self):
+        owner_headers, owner_id, dev_id = self._pair_owner()
+        content = b"Duplicate Hardlink Content 12345678"
+        sha = hashlib.sha256(content).hexdigest()
+
+        # Upload into Camera
+        r1 = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": dev_id, "folder": "Camera", "name": "orig.jpg"},
+            headers={**owner_headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert r1.status_code == 200
+
+        # Upload duplicate into Downloads
+        r2 = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": dev_id, "folder": "Downloads", "name": "dup.jpg"},
+            headers={**owner_headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert r2.status_code == 200
+
+        from main import storage, db
+        user = db.get_user(owner_id)
+        dev = db.get_device(dev_id)
+        p1 = storage.folder_dir(user.slug, dev.slug, "Camera") / "orig.jpg"
+        p2 = storage.folder_dir(user.slug, dev.slug, "Downloads") / "dup.jpg"
+
+        # Both files must exist on disk
+        assert p1.exists()
+        assert p2.exists()
+        assert p1.read_bytes() == content
+        assert p2.read_bytes() == content
+
+        # Quota counts it once
+        status = self.client.get("/api/v1/status", headers=owner_headers).json()
+        assert status["user"]["used_bytes"] == len(content)
+
+    def test_pair_device_slug_uniqueness(self):
+        owner_headers, _, _ = self._pair_owner()
+        from main import db
+
+        # Open pairing and pair second owner device called "Owner Phone"
+        self.client.post("/api/v1/admin/pairing/open", headers=owner_headers)
+        from main import pairing
+        code2 = pairing.generate_code()
+        resp2 = self.client.post("/api/v1/pair", json={
+            "code": code2,
+            "device_name": "Owner Phone",
+            "device_model": "Pixel",
+        })
+        assert resp2.status_code == 200
+        d2 = db.get_device(resp2.json()["device_id"])
+        assert d2.slug == "owner-phone-2"
+
+        # Member invite pairing with repeated names
+        c = self.client.post("/api/v1/admin/users", headers=owner_headers, json={"display_name": "Bob"}).json()
+        inv1 = c["invite_code"]
+        p1 = self.client.post("/api/v1/pair", json={"code": inv1, "device_name": "Pixel 7", "device_model": "P"}).json()
+        dev1 = db.get_device(p1["device_id"])
+        assert dev1.slug == "pixel-7"
+
+        reissue = self.client.post(f"/api/v1/admin/users/{c['user']['id']}/invite", headers=owner_headers).json()
+        p2 = self.client.post("/api/v1/pair", json={"code": reissue["invite_code"], "device_name": "Pixel 7", "device_model": "P"}).json()
+        dev2 = db.get_device(p2["device_id"])
+        assert dev2.slug == "pixel-7-2"
+
+    def test_create_user_quota_default_and_unlimited(self):
+        owner_headers, _, _ = self._pair_owner()
+
+        # 1. Unset quota -> defaults to 100 GB (config default_quota)
+        c_default = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "DefaultQuotaUser",
+        })
+        assert c_default.status_code == 200
+        assert c_default.json()["user"]["quota_bytes"] == 107374182400
+
+        # 2. Unlimited -> quota_bytes is 0
+        c_unlimited = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "UnlimitedUser",
+            "unlimited": True,
+        })
+        assert c_unlimited.status_code == 200
+        assert c_unlimited.json()["user"]["quota_bytes"] == 0
+
+    def test_throttled_device_last_seen(self):
+        from main import _throttled_update_device_last_seen, _device_last_seen_cache
+        _device_last_seen_cache.clear()
+        dev_id = "test_device_throttle_1"
+
+        # 1st call -> writes to DB (returns True)
+        assert _throttled_update_device_last_seen(dev_id) is True
+
+        # Subsequent 4 calls in rapid succession -> throttled (returns False)
+        for _ in range(4):
+            assert _throttled_update_device_last_seen(dev_id) is False
+
+    def test_invite_code_unambiguous_and_global_pairing_limiter(self):
+        owner_headers, _, _ = self._pair_owner()
+        from main import global_pairing_limiter, ip_limiter, pairing
+        global_pairing_limiter.reset()
+        ip_limiter._requests.clear()
+        pairing.close()
+
+        # Verify invite code length and characters
+        create_resp = self.client.post("/api/v1/admin/users", headers=owner_headers, json={
+            "display_name": "InviteTest",
+        }).json()
+        code = create_resp["invite_code"]
+        assert len(code) == 8
+        assert not any(c in code for c in "0O1I")
+
+        # 20 failed pairing attempts across distinct simulated client IPs
+        for i in range(19):
+            r = self.client.post(
+                "/api/v1/pair",
+                json={"code": "WRONG123", "device_name": "D", "device_model": "M"},
+                headers={"X-Forwarded-For": f"192.168.1.{i+10}"},
+            )
+            assert r.status_code in (401, 409)
+
+        # 20th failed attempt triggers global lockout
+        r20 = self.client.post(
+            "/api/v1/pair",
+            json={"code": "WRONG123", "device_name": "D", "device_model": "M"},
+            headers={"X-Forwarded-For": "192.168.1.99"},
+        )
+        assert r20.status_code in (401, 409)
+        assert global_pairing_limiter.is_locked()[0] is True
+
+        # 21st attempt is rejected with 429 pairing_locked
+        r21 = self.client.post(
+            "/api/v1/pair",
+            json={"code": code, "device_name": "D", "device_model": "M"},
+            headers={"X-Forwarded-For": "192.168.1.100"},
+        )
+        assert r21.status_code == 429
+        assert r21.json()["detail"]["error"] == "pairing_locked"
+
+        global_pairing_limiter.reset()
+
+    def test_upload_streaming_chunk_timeout(self):
+        owner_headers, _, dev_id = self._pair_owner()
+        os.environ["PIPHOTOS_CHUNK_TIMEOUT"] = "0.05"
+
+        content = b"slow payload chunk"
+        sha = hashlib.sha256(content).hexdigest()
+
+        import httpx
+        from main import app
+
+        async def _run_timeout_test():
+            async def slow_stream():
+                yield b"slow"
+                await asyncio.sleep(0.15)  # exceeds 0.05s timeout
+                yield b"payload"
+
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                return await ac.put(
+                    f"/api/v1/upload/{sha}",
+                    params={"device": dev_id, "folder": "Camera", "name": "slow.bin"},
+                    headers={**owner_headers, "Content-Length": str(len(content))},
+                    content=slow_stream(),
+                )
+
+        try:
+            r = asyncio.run(_run_timeout_test())
+            assert r.status_code == 408
+            assert r.json()["detail"]["error"] == "timeout"
+            # Verify partial file is kept
+            from main import storage
+            part_path = storage.part_file_path("owner", sha)
+            assert part_path.exists()
+            assert part_path.stat().st_size == len(b"slow")
+        finally:
+            os.environ["PIPHOTOS_CHUNK_TIMEOUT"] = "30.0"
+
+    def test_me_and_files_endpoints_and_cross_user_isolation(self):
+        owner_headers, owner_id, owner_dev = self._pair_owner()
+
+        # 1. GET /api/v1/me for owner
+        me_resp = self.client.get("/api/v1/me", headers=owner_headers)
+        assert me_resp.status_code == 200
+        me = me_resp.json()
+        assert me["user_id"] == owner_id
+        assert me["role"] == "owner"
+        assert me["device_id"] == owner_dev
+
+        # 2. Create member Alice and pair
+        c_alice = self.client.post("/api/v1/admin/users", headers=owner_headers, json={"display_name": "AliceFiles"}).json()
+        p_alice = self.client.post("/api/v1/pair", json={"code": c_alice["invite_code"], "device_name": "Alice Phone", "device_model": "Phone"}).json()
+        alice_headers = {"Authorization": f"Bearer {p_alice['token']}"}
+        alice_dev = p_alice["device_id"]
+
+        # Alice GET /api/v1/me
+        alice_me = self.client.get("/api/v1/me", headers=alice_headers).json()
+        assert alice_me["role"] == "member"
+        assert alice_me["display_name"] == "AliceFiles"
+
+        # Alice uploads a photo
+        payload = b"Alice Secret File Payload 12345"
+        sha = hashlib.sha256(payload).hexdigest()
+        up = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": alice_dev, "folder": "Camera", "name": "secret.txt"},
+            headers={**alice_headers, "Content-Length": str(len(payload))},
+            content=payload,
+        )
+        assert up.status_code == 200
+
+        # Alice lists files
+        files_resp = self.client.get("/api/v1/files", headers=alice_headers)
+        assert files_resp.status_code == 200
+        files = files_resp.json()
+        assert len(files) == 1
+        f_id = files[0]["id"]
+        assert files[0]["name"] == "secret.txt"
+        assert files[0]["size"] == len(payload)
+
+        # Alice downloads content (Full)
+        dl_resp = self.client.get(f"/api/v1/files/{f_id}/content", headers=alice_headers)
+        assert dl_resp.status_code == 200
+        assert dl_resp.content == payload
+
+        # Alice downloads content with Range (bytes=0-4)
+        range_resp = self.client.get(f"/api/v1/files/{f_id}/content", headers={**alice_headers, "Range": "bytes=0-4"})
+        assert range_resp.status_code == 206
+        assert range_resp.content == payload[:5]
+        assert "bytes 0-4/" in range_resp.headers["Content-Range"]
+
+        # Cross-user isolation: Owner tries to access Alice's file_id -> 404
+        cross_resp = self.client.get(f"/api/v1/files/{f_id}/content", headers=owner_headers)
+        assert cross_resp.status_code == 404
+
+        # Owner calls GET /api/v1/files -> does NOT contain Alice's file
+        owner_files = self.client.get("/api/v1/files", headers=owner_headers).json()
+        assert not any(f["id"] == f_id for f in owner_files)

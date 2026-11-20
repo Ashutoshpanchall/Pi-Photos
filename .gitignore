@@ -14,6 +14,7 @@ graphify-out/
 .vscode/
 
 # Server runtime data
+data/
 server/data/
 server/.venv/
 __pycache__/

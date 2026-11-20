@@ -24,7 +24,7 @@ class UserRole(str, Enum):
 # ---------------------------------------------------------------------------
 
 class PairRequest(BaseModel):
-    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    code: str = Field(..., min_length=6, max_length=8)
     device_name: str = Field(..., min_length=1, max_length=200)
     device_model: str = Field(..., min_length=1, max_length=200)
 
@@ -126,7 +126,8 @@ class AdminUserSummary(BaseModel):
 
 class CreateUserRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
-    quota_bytes: int = Field(default=0, ge=0)
+    quota_bytes: Optional[int] = Field(default=None, ge=0)
+    unlimited: bool = Field(default=False)
 
 
 class CreateUserResponse(BaseModel):
@@ -141,6 +142,26 @@ class UpdateUserRequest(BaseModel):
     quota_bytes: Optional[int] = Field(default=None, ge=0)
     status: Optional[str] = Field(default=None, pattern="^(active|disabled)$")
     role: Optional[str] = Field(default=None, pattern="^(owner|member)$")
+
+
+class MeResponse(BaseModel):
+    user_id: str
+    display_name: str
+    role: str
+    quota_bytes: int
+    used_bytes: int
+    device_id: str
+    device_name: str
+
+
+class FileInfo(BaseModel):
+    id: int
+    name: str
+    size: int
+    sha256: str
+    date_taken: Optional[int] = None
+    device_id: str
+    folder: str
 
 
 class InviteResponse(BaseModel):
