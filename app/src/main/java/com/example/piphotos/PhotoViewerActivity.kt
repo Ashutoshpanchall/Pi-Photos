@@ -47,6 +47,8 @@ import com.example.piphotos.media.LocalDeletePolicyHook
 import com.example.piphotos.media.LocalMediaIndex
 import com.example.piphotos.media.LocalMediaItem
 import com.example.piphotos.media.ViewerSession
+import android.os.Trace
+import com.example.piphotos.perf.JankTracker
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -112,6 +114,8 @@ class PhotoViewerActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Trace.beginSection("PhotoViewer.onCreate")
+        try {
         ThemeManager.applyTheme(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -124,6 +128,7 @@ class PhotoViewerActivity : AppCompatActivity() {
 
         binding = ActivityPhotoViewerBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        JankTracker.getInstance()?.track(this)
 
         isTrashMode = intent.getBooleanExtra(EXTRA_IS_TRASH_MODE, false)
         albumId = intent.getLongExtra(EXTRA_ALBUM_ID, -1L)
@@ -163,6 +168,9 @@ class PhotoViewerActivity : AppCompatActivity() {
                 updateFavoriteIcon(isCurrentFavorite)
             }
         }
+        } finally {
+            Trace.endSection() // PhotoViewer.onCreate
+        }
     }
 
     private fun loadMediaList() {
@@ -186,6 +194,8 @@ class PhotoViewerActivity : AppCompatActivity() {
     }
 
     private fun setupViewPager() {
+        Trace.beginSection("PhotoViewer.setupViewPager")
+        try {
         adapter = PhotoPagerAdapter(
             items = mediaItems,
             onSingleTap = { toggleToolbarsVisibility() },
@@ -239,6 +249,9 @@ class PhotoViewerActivity : AppCompatActivity() {
 
         attachActivePlayerToCurrentPage(autoplay = true)
         updateHeaderAndFavoriteState()
+        } finally {
+            Trace.endSection() // PhotoViewer.setupViewPager
+        }
     }
 
     private fun setupFilmstrip() {

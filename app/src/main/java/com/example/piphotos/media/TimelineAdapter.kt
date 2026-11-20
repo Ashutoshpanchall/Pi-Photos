@@ -1,6 +1,7 @@
 package com.example.piphotos.media
 
 import android.os.CancellationSignal
+import android.os.Trace
 import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.View
@@ -87,9 +88,14 @@ class TimelineAdapter(
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        Trace.beginSection("TimelineAdapter.bind")
+        try {
         when (val row = getItem(position)) {
             is TimelineRow.HeaderRow -> (holder as HeaderViewHolder).bind(row)
             is TimelineRow.MediaRow -> (holder as MediaViewHolder).bind(row.item)
+        }
+        } finally {
+            Trace.endSection()
         }
     }
 

@@ -12,6 +12,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.example.piphotos.databinding.ActivityMainBinding
 import com.example.piphotos.media.LocalMediaIndex
+import com.example.piphotos.perf.JankTracker
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
@@ -33,6 +34,8 @@ class MainActivity : AppCompatActivity(), WelcomeFragment.Listener {
         window.setBackgroundDrawableResource(R.color.bg_page)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        JankTracker.getInstance()?.track(this)
 
         // LAYER 1: Synchronous initial status bar inset on fragment container
         val initialStatusHeight = WindowInsetsHelper.getStatusBarHeight(this)
