@@ -17,6 +17,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 data class ServerInfo(
@@ -77,6 +78,23 @@ class PiHttpClient(
         connectTimeoutSec: Long = 5,
         readTimeoutSec: Long = 10
     ): Pair<OkHttpClient, FingerprintTrustManager> {
+        val currentWifi = getActiveWifiNetwork()
+        val netId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            currentWifi?.networkHandle ?: -1L
+        } else {
+            currentWifi?.hashCode()?.toLong() ?: -1L
+        }
+
+        // Only cache clients with an explicit expected fingerprint (pinned server).
+        // TOFU discovery requests (expectedFingerprint == null) require fresh FingerprintTrustManager instances.
+        if (expectedFingerprint != null) {
+            val cacheKey = "${expectedFingerprint}_${connectTimeoutSec}_${readTimeoutSec}_$netId"
+            val cached = clientCache[cacheKey]
+            if (cached != null) {
+                return cached
+            }
+        }
+
         val trustManager = FingerprintTrustManager(expectedFingerprint)
         val builder = OkHttpClient.Builder()
             .sslSocketFactory(trustManager.createSslSocketFactory(), trustManager)
@@ -86,12 +104,16 @@ class PiHttpClient(
             .writeTimeout(readTimeoutSec, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
 
-        val wifiNetwork = getActiveWifiNetwork()
-        if (wifiNetwork != null) {
-            builder.socketFactory(wifiNetwork.socketFactory)
+        if (currentWifi != null) {
+            builder.socketFactory(currentWifi.socketFactory)
         }
 
-        return Pair(builder.build(), trustManager)
+        val pair = Pair(builder.build(), trustManager)
+        if (expectedFingerprint != null) {
+            val cacheKey = "${expectedFingerprint}_${connectTimeoutSec}_${readTimeoutSec}_$netId"
+            clientCache[cacheKey] = pair
+        }
+        return pair
     }
 
     suspend fun probeTcp(host: String, port: Int, timeoutMs: Int = 2000): Boolean = withContext(Dispatchers.IO) {
@@ -365,7 +387,7 @@ class PiHttpClient(
                                 skipped += s
                             }
                         }
-                        val buffer = ByteArray(64 * 1024)
+                        val buffer = ByteArray(256 * 1024)
                         var bytesRemaining = lengthToSend
                         while (bytesRemaining > 0) {
                             val toRead = minOf(buffer.size.toLong(), bytesRemaining).toInt()
@@ -804,6 +826,13 @@ class PiHttpClient(
     companion object {
         @Volatile
         private var INSTANCE: PiHttpClient? = null
+
+        // Cached OkHttpClient instances per fingerprint & timeout profile to reuse HTTP/2 socket pools
+        private val clientCache = ConcurrentHashMap<String, Pair<OkHttpClient, FingerprintTrustManager>>()
+
+        fun clearClientCache() {
+            clientCache.clear()
+        }
 
         fun getInstance(context: Context): PiHttpClient {
             return INSTANCE ?: synchronized(this) {
