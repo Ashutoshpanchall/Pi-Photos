@@ -217,8 +217,8 @@ class DevicePairingBottomSheet(
             binding.etPort.error = "Invalid port"
             return
         }
-        if (code.length != 6) {
-            binding.etPairingCode.error = "Pairing code must be 6 digits"
+        if (code.length != 6 && code.length != 8) {
+            binding.etPairingCode.error = "Enter 6-digit owner code or 8-character invite code"
             return
         }
 

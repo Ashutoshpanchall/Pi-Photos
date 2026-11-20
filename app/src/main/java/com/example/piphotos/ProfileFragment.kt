@@ -44,6 +44,11 @@ class ProfileFragment : Fragment() {
         // Dynamic People on this Node list (only if connected to a node with users)
         renderUsersList()
 
+        // Users & Storage Activity (Owner Only)
+        binding.rowUsersAndStorage.setOnClickListener {
+            UsersAndStorageActivity.start(requireContext())
+        }
+
         // Storage Distribution Rebalance Sheet
         binding.btnRebalanceStorage.setOnClickListener {
             StorageDistributionBottomSheet {
@@ -94,17 +99,39 @@ class ProfileFragment : Fragment() {
             val isPaired = SyncNodePreferences.isPaired(context)
             if (isPaired) {
                 val syncRepo = com.example.piphotos.sync.SyncRepository.getInstance(context)
+                val isOwner = SyncNodePreferences.isOwner(context)
+                val displayName = SyncNodePreferences.getDisplayName(context).ifEmpty { "Member" }
+
                 viewLifecycleOwner.lifecycleScope.launch {
                     val res = syncRepo.fetchServerStatus()
                     res.onSuccess { status ->
                         val usedGb = status.userUsed / (1024.0 * 1024.0 * 1024.0)
                         val quotaGb = status.userQuota / (1024.0 * 1024.0 * 1024.0)
                         val freeGb = status.userFree / (1024.0 * 1024.0 * 1024.0)
-                        val pct = if (status.userQuota > 0) ((status.userUsed.toDouble() / status.userQuota.toDouble()) * 100).toInt() else 0
 
-                        b.tvQuotaUsed.text = String.format(java.util.Locale.US, "%.1f GB of %.0f GB used", usedGb, quotaGb)
-                        b.tvQuotaFree.text = String.format(java.util.Locale.US, "%.1f GB free", freeGb)
-                        b.pbPersonalQuota.progress = pct
+                        if (!isOwner) {
+                            if (status.userQuota == 0L) {
+                                b.tvQuotaUsed.text = String.format(java.util.Locale.US, "Joined as %s · %.1f GB used", displayName, usedGb)
+                                b.tvQuotaFree.text = "Unlimited"
+                                b.pbPersonalQuota.progress = 0
+                            } else {
+                                val pct = ((status.userUsed.toDouble() / status.userQuota.toDouble()) * 100).toInt()
+                                b.tvQuotaUsed.text = String.format(java.util.Locale.US, "Joined as %s · %.1f GB of %.0f GB used", displayName, usedGb, quotaGb)
+                                b.tvQuotaFree.text = String.format(java.util.Locale.US, "%.1f GB free", freeGb)
+                                b.pbPersonalQuota.progress = pct.coerceIn(0, 100)
+                            }
+                        } else {
+                            if (status.userQuota == 0L) {
+                                b.tvQuotaUsed.text = String.format(java.util.Locale.US, "%.1f GB used (Unlimited)", usedGb)
+                                b.tvQuotaFree.text = "Unlimited"
+                                b.pbPersonalQuota.progress = 0
+                            } else {
+                                val pct = ((status.userUsed.toDouble() / status.userQuota.toDouble()) * 100).toInt()
+                                b.tvQuotaUsed.text = String.format(java.util.Locale.US, "%.1f GB of %.0f GB used", usedGb, quotaGb)
+                                b.tvQuotaFree.text = String.format(java.util.Locale.US, "%.1f GB free", freeGb)
+                                b.pbPersonalQuota.progress = pct.coerceIn(0, 100)
+                            }
+                        }
                     }
                 }
             } else {
@@ -147,16 +174,21 @@ class ProfileFragment : Fragment() {
             return
         }
 
+        val isOwner = SyncNodePreferences.isOwner(context)
+
         b.cardProfilePiOptIn.visibility = View.GONE
         b.cardPersonalQuota.visibility = View.VISIBLE
         b.rowPipeline.visibility = View.VISIBLE
+
+        b.rowUsersAndStorage.visibility = if (isOwner) View.VISIBLE else View.GONE
+        b.dividerUsersAndStorage.visibility = if (isOwner) View.VISIBLE else View.GONE
 
         val pairedNode = SyncNodePreferences.getPairedNode(context)
         val nodeName = pairedNode?.nodeName ?: NodeRepository.nodeName
         b.layoutNodePill.visibility = if (nodeName.isNotEmpty()) View.VISIBLE else View.GONE
 
         val users = NodeRepository.getUsers()
-        b.layoutPeopleSection.visibility = if (users.isNotEmpty()) View.VISIBLE else View.GONE
+        b.layoutPeopleSection.visibility = if (isOwner && users.isNotEmpty()) View.VISIBLE else View.GONE
         b.rowRemoteNode.visibility = if (NodeRepository.remoteNodeDomain.isNotEmpty()) View.VISIBLE else View.GONE
         b.btnSignOut.visibility = if (users.isNotEmpty()) View.VISIBLE else View.GONE
 

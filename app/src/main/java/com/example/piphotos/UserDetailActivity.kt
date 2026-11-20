@@ -1,26 +1,40 @@
 package com.example.piphotos
 
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.widget.doAfterTextChanged
+import androidx.lifecycle.lifecycleScope
 import com.example.piphotos.databinding.ActivityUserDetailBinding
-import com.google.android.material.checkbox.MaterialCheckBox
+import com.example.piphotos.databinding.ItemUserDeviceBinding
+import com.example.piphotos.net.AdminDeviceSummary
+import com.example.piphotos.net.AdminUser
+import com.example.piphotos.net.PiHttpClient
+import com.example.piphotos.net.QrCodeGenerator
+import com.example.piphotos.net.UpdateUserRequest
+import com.example.piphotos.sync.SyncNodePreferences
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 class UserDetailActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityUserDetailBinding
-    private var userId: String = "u2"
+    private var userId: String = ""
+    private val httpClient by lazy { PiHttpClient.getInstance(this) }
+    private var currentUser: AdminUser? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeManager.applyTheme(this)
@@ -37,58 +51,203 @@ class UserDetailActivity : AppCompatActivity() {
             extraTopDp = 0
         )
 
-        userId = intent.getStringExtra(EXTRA_USER_ID) ?: "u2"
+        userId = intent.getStringExtra(EXTRA_USER_ID) ?: ""
 
         binding.btnUserDetailBack.setOnClickListener {
             finish()
         }
 
-        bindUserData()
-
-        if (intent.getBooleanExtra(EXTRA_OPEN_QUOTA, false)) {
-            showModifyQuotaDialog()
+        binding.btnRenameUser.setOnClickListener {
+            showRenameDialog()
         }
 
         binding.btnAdjustQuota.setOnClickListener {
             showModifyQuotaDialog()
         }
 
+        binding.btnReissueInvite.setOnClickListener {
+            reissueInviteCode()
+        }
+
         binding.btnToggleStatus.setOnClickListener {
-            val user = NodeRepository.getUser(userId) ?: return@setOnClickListener
-            val action = if (user.isActive) "Disable" else "Enable"
-            AlertDialog.Builder(this)
-                .setTitle("$action ${user.name}?")
-                .setMessage("When disabled, this user cannot access their vault or stream media over private network.")
-                .setPositiveButton(action) { _, _ ->
-                    NodeRepository.toggleUserStatus(userId)
-                    Toast.makeText(this, "User access updated", Toast.LENGTH_SHORT).show()
-                    bindUserData()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
+            toggleUserStatus()
         }
 
         binding.btnDeleteUser.setOnClickListener {
-            val user = NodeRepository.getUser(userId) ?: return@setOnClickListener
-            AlertDialog.Builder(this)
-                .setTitle("Remove ${user.name} from Node?")
-                .setMessage("Are you sure? This will revoke the user's vault access and purge their encrypted blobs (${user.usedGB} GB) from the server storage. This action cannot be undone.")
-                .setPositiveButton("Remove Permanently") { _, _ ->
-                    NodeRepository.removeUser(userId)
-                    Toast.makeText(this, "${user.name} removed from node", Toast.LENGTH_SHORT).show()
-                    finish()
+            showDeleteUserDialog()
+        }
+
+        loadUserData()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        loadUserData()
+    }
+
+    private fun loadUserData() {
+        val serverUrl = SyncNodePreferences.getServerUrl(this) ?: ""
+        val authToken = SyncNodePreferences.getAuthToken(this) ?: ""
+        val fp = SyncNodePreferences.getTlsFingerprint(this)
+
+        if (serverUrl.isEmpty() || authToken.isEmpty()) {
+            loadMockUserData()
+            return
+        }
+
+        lifecycleScope.launch {
+            val usersRes = httpClient.listAdminUsers(serverUrl, authToken, fp)
+            usersRes.onSuccess { users ->
+                val found = users.find { it.id == userId }
+                if (found != null) {
+                    currentUser = found
+                    bindAdminUser(found)
+                    loadDevices(serverUrl, authToken, fp)
+                } else {
+                    loadMockUserData()
                 }
-                .setNegativeButton("Cancel", null)
-                .show()
+            }.onFailure {
+                loadMockUserData()
+            }
         }
     }
 
-    private fun bindUserData() {
+    private fun loadDevices(serverUrl: String, authToken: String, fp: String?) {
+        lifecycleScope.launch {
+            val devRes = httpClient.listUserDevices(serverUrl, authToken, userId, fp)
+            devRes.onSuccess { devices ->
+                bindDevices(devices)
+            }.onFailure {
+                binding.containerDevicesList.removeAllViews()
+                binding.tvNoDevices.visibility = View.VISIBLE
+            }
+        }
+    }
+
+    private fun bindDevices(devices: List<AdminDeviceSummary>) {
+        val container = binding.containerDevicesList
+        container.removeAllViews()
+
+        if (devices.isEmpty()) {
+            binding.tvNoDevices.visibility = View.VISIBLE
+            return
+        }
+        binding.tvNoDevices.visibility = View.GONE
+
+        val inflater = LayoutInflater.from(this)
+        for (dev in devices) {
+            val devBinding = ItemUserDeviceBinding.inflate(inflater, container, false)
+            devBinding.tvDeviceName.text = dev.name
+            val lastSeen = dev.lastSeenAt ?: "Never"
+            devBinding.tvDeviceDetails.text = "${dev.model} · Last seen $lastSeen"
+
+            devBinding.btnRevokeDevice.setOnClickListener {
+                confirmRevokeDevice(dev)
+            }
+
+            container.addView(devBinding.root)
+        }
+    }
+
+    private fun confirmRevokeDevice(dev: AdminDeviceSummary) {
+        AlertDialog.Builder(this)
+            .setTitle("Revoke ${dev.name}?")
+            .setMessage("This device token will be revoked immediately. The device will be disconnected from the vault on its next request.")
+            .setPositiveButton("Revoke") { _, _ ->
+                val serverUrl = SyncNodePreferences.getServerUrl(this) ?: return@setPositiveButton
+                val authToken = SyncNodePreferences.getAuthToken(this) ?: return@setPositiveButton
+                val fp = SyncNodePreferences.getTlsFingerprint(this)
+
+                lifecycleScope.launch {
+                    val res = httpClient.revokeDevice(serverUrl, authToken, dev.id, fp)
+                    res.onSuccess {
+                        Toast.makeText(this@UserDetailActivity, "Device token revoked", Toast.LENGTH_SHORT).show()
+                        loadDevices(serverUrl, authToken, fp)
+                    }.onFailure { err ->
+                        Toast.makeText(this@UserDetailActivity, "Failed to revoke device: ${err.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun bindAdminUser(user: AdminUser) {
+        binding.tvUserDetailName.text = user.displayName
+        val initials = user.displayName.split(" ")
+            .filter { it.isNotEmpty() }
+            .map { it.first().uppercaseChar() }
+            .take(2)
+            .joinToString("")
+            .ifEmpty { "U" }
+        binding.tvUserDetailInitials.text = initials
+        binding.tvUserDetailUsername.text = "slug: ${user.slug}"
+
+        val isOwner = user.role.equals("owner", ignoreCase = true)
+        binding.tvUserDetailRoleBadge.text = if (isOwner) "Owner Account" else "Member Account"
+
+        val isActive = user.status.equals("active", ignoreCase = true)
+        if (isActive) {
+            binding.tvUserDetailStatusDot.text = "● Active"
+            binding.tvUserDetailStatusDot.setTextColor(ContextCompat.getColor(this, R.color.status_green))
+            binding.btnToggleStatus.text = "Disable User Access"
+            binding.btnToggleStatus.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+        } else {
+            binding.tvUserDetailStatusDot.text = "● Disabled"
+            binding.tvUserDetailStatusDot.setTextColor(ContextCompat.getColor(this, R.color.status_red))
+            binding.btnToggleStatus.text = "Enable User Access"
+            binding.btnToggleStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
+        }
+
+        if (isOwner) {
+            binding.layoutAdminProtectedNotice.visibility = View.VISIBLE
+            binding.btnDeleteUser.isEnabled = false
+            binding.btnDeleteUser.alpha = 0.5f
+        } else {
+            binding.layoutAdminProtectedNotice.visibility = View.GONE
+            binding.btnDeleteUser.isEnabled = true
+            binding.btnDeleteUser.alpha = 1.0f
+        }
+
+        val usedGb = user.usedBytes / (1024.0 * 1024.0 * 1024.0)
+        binding.tvUserDetailUsed.text = String.format(Locale.US, "%.1f GB used", usedGb)
+
+        if (user.quotaBytes == 0L) {
+            binding.tvUserDetailLimit.text = "Unlimited Quota"
+            binding.tvUserDetailAvailable.text = "Bound by disk reserve"
+            binding.tvUserDetailPercent.text = "Unlimited"
+            binding.pbUserDetail.progress = 0
+            binding.pbUserDetail.progressTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.primary_blue)
+            )
+        } else {
+            val quotaGb = user.quotaBytes / (1024.0 * 1024.0 * 1024.0)
+            val remainingGb = maxOf(0.0, quotaGb - usedGb)
+            val pct = ((user.usedBytes.toDouble() / user.quotaBytes.toDouble()) * 100).toInt()
+
+            binding.tvUserDetailLimit.text = String.format(Locale.US, "%.1f GB Quota", quotaGb)
+            binding.tvUserDetailAvailable.text = String.format(Locale.US, "%.1f GB remaining", remainingGb)
+            binding.tvUserDetailPercent.text = "$pct% used"
+
+            binding.pbUserDetail.progress = pct.coerceIn(0, 100)
+            val color = when {
+                pct >= 90 -> ContextCompat.getColor(this, R.color.status_red)
+                pct >= 75 -> ContextCompat.getColor(this, R.color.status_amber)
+                else -> ContextCompat.getColor(this, R.color.primary_blue)
+            }
+            binding.pbUserDetail.progressTintList = ColorStateList.valueOf(color)
+        }
+
+        binding.tvUserStatPhotos.text = user.fileCount.toString()
+        binding.tvUserStatVideos.text = user.devicesCount.toString()
+        binding.tvUserStatVault.text = "1"
+    }
+
+    private fun loadMockUserData() {
         val user = NodeRepository.getUser(userId) ?: run {
             finish()
             return
         }
-
         binding.tvUserDetailName.text = user.name
         binding.tvUserDetailInitials.text = user.initials
         binding.tvUserDetailUsername.text = "${user.username} · ${user.email}"
@@ -96,250 +255,249 @@ class UserDetailActivity : AppCompatActivity() {
 
         val isAdmin = user.role.equals("Admin", ignoreCase = true) || user.id == "u1"
         if (isAdmin) {
-            binding.tvUserDetailStatusDot.text = "● Primary Admin"
-            binding.tvUserDetailStatusDot.setTextColor(ContextCompat.getColor(this, R.color.primary_blue))
-            binding.btnToggleStatus.visibility = View.GONE
-            binding.btnDeleteUser.visibility = View.GONE
             binding.layoutAdminProtectedNotice.visibility = View.VISIBLE
+            binding.btnDeleteUser.isEnabled = false
+            binding.btnDeleteUser.alpha = 0.5f
         } else {
             binding.layoutAdminProtectedNotice.visibility = View.GONE
-            binding.btnToggleStatus.visibility = View.VISIBLE
-            binding.btnDeleteUser.visibility = View.VISIBLE
-
-            if (user.isActive) {
-                binding.tvUserDetailStatusDot.text = "● Active"
-                binding.tvUserDetailStatusDot.setTextColor(ContextCompat.getColor(this, R.color.status_green))
-                binding.btnToggleStatus.text = "Disable User Access"
-                binding.btnToggleStatus.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
-            } else {
-                binding.tvUserDetailStatusDot.text = "● Suspended"
-                binding.tvUserDetailStatusDot.setTextColor(ContextCompat.getColor(this, R.color.status_red))
-                binding.btnToggleStatus.text = "Enable User Access"
-                binding.btnToggleStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
-            }
+            binding.btnDeleteUser.isEnabled = true
+            binding.btnDeleteUser.alpha = 1.0f
         }
 
-        // Storage calculations
-        val usedFormatted = String.format("%.1f", user.usedGB)
-        val quotaFormatted = String.format("%.1f", user.quotaGB)
-        val remaining = user.quotaGB - user.usedGB
-        val remainingFormatted = String.format("%.1f", if (remaining > 0) remaining else 0.0)
-        val usagePercent = if (user.quotaGB > 0) ((user.usedGB / user.quotaGB) * 100).toInt() else 0
-
-        binding.tvUserDetailUsed.text = "$usedFormatted GB used"
-        binding.tvUserDetailLimit.text = "$quotaFormatted GB Quota"
-        binding.tvUserDetailAvailable.text = "$remainingFormatted GB remaining"
-        binding.tvUserDetailPercent.text = "$usagePercent% used"
-
-        binding.pbUserDetail.progress = usagePercent
-
-        // Color coding progress bar based on threshold
-        val progressColor = when {
-            usagePercent > 90 -> ContextCompat.getColor(this, R.color.status_red)
-            usagePercent > 75 -> ContextCompat.getColor(this, R.color.status_amber)
-            else -> ContextCompat.getColor(this, R.color.primary_blue)
-        }
-        binding.pbUserDetail.progressTintList = ColorStateList.valueOf(progressColor)
-
-        // Media Statistics
-        binding.tvUserStatPhotos.text = user.photosCount.toString()
-        binding.tvUserStatVideos.text = user.videosCount.toString()
-        binding.tvUserStatVault.text = user.vaultCount.toString()
+        binding.tvUserDetailUsed.text = String.format(Locale.US, "%.1f GB used", user.usedGB)
+        binding.tvUserDetailLimit.text = String.format(Locale.US, "%.1f GB Quota", user.quotaGB)
+        val remaining = maxOf(0.0, user.quotaGB - user.usedGB)
+        binding.tvUserDetailAvailable.text = String.format(Locale.US, "%.1f GB remaining", remaining)
+        val pct = if (user.quotaGB > 0) ((user.usedGB / user.quotaGB) * 100).toInt() else 0
+        binding.tvUserDetailPercent.text = "$pct% used"
+        binding.pbUserDetail.progress = pct
     }
 
-    private fun showModifyQuotaDialog() {
-        val user = NodeRepository.getUser(userId) ?: return
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_modify_quota, null)
-
-        val tvCurrentUsed = dialogView.findViewById<TextView>(R.id.tvDialogCurrentUsed)
-        val tvCurrentQuota = dialogView.findViewById<TextView>(R.id.tvDialogCurrentQuota)
-        val tvAvailable = dialogView.findViewById<TextView>(R.id.tvDialogAvailableCapacity)
-        val btnPreset1 = dialogView.findViewById<TextView>(R.id.btnPreset1)
-        val btnPreset2 = dialogView.findViewById<TextView>(R.id.btnPreset2)
-        val btnPreset3 = dialogView.findViewById<TextView>(R.id.btnPreset3)
-        val btnPreset4 = dialogView.findViewById<TextView>(R.id.btnPreset4)
-        val etCustom = dialogView.findViewById<EditText>(R.id.etCustomQuota)
-        val btnUnit = dialogView.findViewById<TextView>(R.id.btnUnitToggle)
-        val tvError = dialogView.findViewById<TextView>(R.id.tvQuotaError)
-        val tvNotice = dialogView.findViewById<TextView>(R.id.tvRebalanceNotice)
-        val cbAutoRebalance = dialogView.findViewById<MaterialCheckBox>(R.id.cbAutoRebalance)
-        val tvBreakdown = dialogView.findViewById<TextView>(R.id.tvRebalanceBreakdown)
-
-        tvCurrentUsed.text = "${String.format("%.1f", user.usedGB)} GB"
-        tvCurrentQuota.text = "${String.format("%.1f", user.quotaGB)} GB"
-        tvAvailable.text = "${String.format("%.1f", NodeRepository.getUnallocatedCapacityGB())} GB Free"
-
-        var selectedQuotaGB = user.quotaGB
-        var isTB = false
-        var activePlan: RebalancePlan = NodeRepository.planAutoRebalance(userId, selectedQuotaGB)
-
-        // Generate dynamic presets tailored to N users and storage size
-        val presets = NodeRepository.getDynamicPresetsForUser(userId)
-        val presetButtons = listOf(btnPreset1, btnPreset2, btnPreset3, btnPreset4)
-
-        for (i in 0 until Math.min(presets.size, presetButtons.size)) {
-            presetButtons[i].text = presets[i].title
-        }
-
-        fun updatePresetStyles(target: Double) {
-            val pill = R.drawable.bg_pill_capsule
-            val normal = R.drawable.bg_invite_button
-            for (i in 0 until Math.min(presets.size, presetButtons.size)) {
-                val matches = Math.abs(target - presets[i].quotaGB) < 0.05
-                presetButtons[i].setBackgroundResource(if (matches) pill else normal)
-            }
-        }
-
-        fun evaluateQuota(quota: Double) {
-            selectedQuotaGB = quota
-            activePlan = NodeRepository.planAutoRebalance(userId, quota)
-
-            if (!activePlan.isFeasible) {
-                tvError.text = activePlan.summaryMessage
-                tvError.visibility = View.VISIBLE
-                tvNotice.text = "Invalid allocation requested."
-                tvNotice.setTextColor(ContextCompat.getColor(this@UserDetailActivity, R.color.status_red))
-                cbAutoRebalance.visibility = View.GONE
-                tvBreakdown.visibility = View.GONE
-                return
-            }
-
-            tvError.visibility = View.GONE
-
-            if (activePlan.cutoffRequiredGB > 0) {
-                cbAutoRebalance.visibility = View.VISIBLE
-                tvBreakdown.visibility = View.VISIBLE
-
-                if (activePlan.isOverAllocated) {
-                    tvNotice.text = "⚠️ Over-allocates node capacity by ${String.format("%.1f", activePlan.overAllocatedByGB)} GB"
-                    tvNotice.setTextColor(ContextCompat.getColor(this@UserDetailActivity, R.color.status_red))
-                } else {
-                    tvNotice.text = "Auto-rebalancing required: ${String.format("%.1f", activePlan.cutoffRequiredGB)} GB borrowed from other users."
-                    tvNotice.setTextColor(ContextCompat.getColor(this@UserDetailActivity, R.color.status_amber))
-                }
-
-                val breakdownText = activePlan.userCutoffs.entries
-                    .filter { it.value > 0 }
-                    .joinToString("\n") { entry ->
-                        val otherName = NodeRepository.getUser(entry.key)?.name ?: entry.key
-                        "• $otherName: -${String.format("%.1f", entry.value)} GB unused buffer"
-                    }
-                tvBreakdown.text = breakdownText
-            } else {
-                cbAutoRebalance.visibility = View.GONE
-                tvBreakdown.visibility = View.GONE
-                tvNotice.text = "✓ Fits within unallocated capacity (${String.format("%.1f", activePlan.unallocatedCoveredGB)} GB free pool used)."
-                tvNotice.setTextColor(ContextCompat.getColor(this@UserDetailActivity, R.color.status_green))
-            }
-        }
-
-        updatePresetStyles(selectedQuotaGB)
-        evaluateQuota(selectedQuotaGB)
-
-        for (i in 0 until Math.min(presets.size, presetButtons.size)) {
-            val preset = presets[i]
-            presetButtons[i].setOnClickListener {
-                etCustom.setText("")
-                updatePresetStyles(preset.quotaGB)
-                evaluateQuota(preset.quotaGB)
-            }
-        }
-
-        etCustom.doAfterTextChanged { s ->
-            val text = s?.toString()?.trim() ?: ""
-            if (text.isNotEmpty()) {
-                val num = text.toDoubleOrNull()
-                if (num == null || num <= 0.0) {
-                    tvError.text = "Please enter a valid numeric storage quota"
-                    tvError.visibility = View.VISIBLE
-                    tvNotice.text = "Invalid number format."
-                    tvNotice.setTextColor(ContextCompat.getColor(this@UserDetailActivity, R.color.status_red))
-                    cbAutoRebalance.visibility = View.GONE
-                    tvBreakdown.visibility = View.GONE
-                    return@doAfterTextChanged
-                }
-                val targetGB = if (isTB) num * 1024.0 else num
-                updatePresetStyles(targetGB)
-                evaluateQuota(targetGB)
-            } else {
-                tvError.visibility = View.GONE
-                updatePresetStyles(selectedQuotaGB)
-                evaluateQuota(selectedQuotaGB)
-            }
-        }
-
-        btnUnit.setOnClickListener {
-            isTB = !isTB
-            btnUnit.text = if (isTB) "TB" else "GB"
-            val text = etCustom.text.toString().trim()
-            if (text.isNotEmpty()) {
-                val num = text.toDoubleOrNull()
-                if (num != null && num > 0.0) {
-                    val targetGB = if (isTB) num * 1024.0 else num
-                    updatePresetStyles(targetGB)
-                    evaluateQuota(targetGB)
-                }
-            } else {
-                evaluateQuota(selectedQuotaGB)
-            }
+    private fun showRenameDialog() {
+        val user = currentUser ?: return
+        val input = EditText(this).apply {
+            setText(user.displayName)
+            setSelection(text.length)
+            setPadding(48, 32, 48, 32)
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Modify Storage Limit for ${user.name}")
-            .setView(dialogView)
-            .setPositiveButton("Confirm Changes", null)
-            .setNegativeButton("Cancel", null)
-            .create().apply {
-                show()
-                getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                    val customStr = etCustom.text.toString().trim()
-                    val candidateQuota = if (customStr.isNotEmpty()) {
-                        val num = customStr.toDoubleOrNull()
-                        if (num == null || num <= 0.0) {
-                            tvError.text = "Please enter a valid numeric storage quota"
-                            tvError.visibility = View.VISIBLE
-                            return@setOnClickListener
-                        }
-                        if (isTB) num * 1024.0 else num
-                    } else {
-                        selectedQuotaGB
-                    }
-
-                    evaluateQuota(candidateQuota)
-
-                    if (!activePlan.isFeasible) {
-                        tvError.text = activePlan.summaryMessage
-                        tvError.visibility = View.VISIBLE
-                        return@setOnClickListener
-                    }
-
-                    if (activePlan.cutoffRequiredGB > 0 && !cbAutoRebalance.isChecked) {
-                        tvError.text = "Please enable auto-rebalance checkbox to borrow unused headroom from other users."
-                        tvError.visibility = View.VISIBLE
-                        return@setOnClickListener
-                    }
-
-                    // Confirmation summary dialog
-                    val delta = candidateQuota - user.quotaGB
-                    val deltaStr = if (delta >= 0) "+${String.format("%.1f", delta)} GB" else "${String.format("%.1f", delta)} GB"
-                    AlertDialog.Builder(this@UserDetailActivity)
-                        .setTitle("Confirm Storage Adjustment")
-                        .setMessage(
-                            "User: ${user.name}\n" +
-                            "New Quota: ${String.format("%.1f", candidateQuota)} GB ($deltaStr)\n\n" +
-                            activePlan.summaryMessage + "\n\n" +
-                            "Apply this intelligent distribution to the server storage?"
-                        )
-                        .setPositiveButton("Apply") { _, _ ->
-                            NodeRepository.applyRebalancePlan(activePlan)
-                            Toast.makeText(this@UserDetailActivity, "Storage quotas rebalanced successfully", Toast.LENGTH_SHORT).show()
-                            dismiss()
-                            bindUserData()
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
+            .setTitle("Rename User")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isNotEmpty()) {
+                    updateUser(UpdateUserRequest(displayName = newName))
                 }
             }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showModifyQuotaDialog() {
+        val user = currentUser ?: return
+        val options = arrayOf("10 GB", "50 GB", "100 GB", "Unlimited", "Custom...")
+        AlertDialog.Builder(this)
+            .setTitle("Set Quota for ${user.displayName}")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> applyQuotaBytes(10L * 1024 * 1024 * 1024)
+                    1 -> applyQuotaBytes(50L * 1024 * 1024 * 1024)
+                    2 -> applyQuotaBytes(100L * 1024 * 1024 * 1024)
+                    3 -> applyQuotaBytes(0L) // Unlimited
+                    4 -> showCustomQuotaDialog()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showCustomQuotaDialog() {
+        val input = EditText(this).apply {
+            hint = "Quota in GB (e.g. 25)"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setPadding(48, 32, 48, 32)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Custom Quota")
+            .setView(input)
+            .setPositiveButton("Set") { _, _ ->
+                val gb = input.text.toString().trim().toDoubleOrNull()
+                if (gb != null && gb > 0.0) {
+                    applyQuotaBytes((gb * 1024L * 1024L * 1024L).toLong())
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun applyQuotaBytes(newQuotaBytes: Long) {
+        val user = currentUser ?: return
+        if (newQuotaBytes in 1 until user.usedBytes) {
+            val usedGb = user.usedBytes / (1024.0 * 1024.0 * 1024.0)
+            val newGb = newQuotaBytes / (1024.0 * 1024.0 * 1024.0)
+            AlertDialog.Builder(this)
+                .setTitle("Quota Warning")
+                .setMessage(
+                    String.format(
+                        Locale.US,
+                        "The new quota (%.1f GB) is below the current usage (%.1f GB). Uploads for this user will be blocked until usage drops.\n\nForce this quota change?",
+                        newGb, usedGb
+                    )
+                )
+                .setPositiveButton("Force") { _, _ ->
+                    updateUser(UpdateUserRequest(quotaBytes = newQuotaBytes), force = true)
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        } else {
+            updateUser(UpdateUserRequest(quotaBytes = newQuotaBytes), force = false)
+        }
+    }
+
+    private fun updateUser(req: UpdateUserRequest, force: Boolean = false) {
+        val serverUrl = SyncNodePreferences.getServerUrl(this) ?: return
+        val authToken = SyncNodePreferences.getAuthToken(this) ?: return
+        val fp = SyncNodePreferences.getTlsFingerprint(this)
+
+        lifecycleScope.launch {
+            val res = httpClient.updateAdminUser(serverUrl, authToken, userId, req, force, fp)
+            res.onSuccess { updated ->
+                currentUser = updated
+                bindAdminUser(updated)
+                Toast.makeText(this@UserDetailActivity, "User updated", Toast.LENGTH_SHORT).show()
+            }.onFailure { err ->
+                val msg = if (err.message?.contains("last_owner_protected") == true) {
+                    "Cannot disable or demote the last active owner."
+                } else {
+                    err.localizedMessage ?: "Update failed"
+                }
+                Toast.makeText(this@UserDetailActivity, msg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun toggleUserStatus() {
+        val user = currentUser ?: return
+        val newStatus = if (user.status.equals("active", ignoreCase = true)) "disabled" else "active"
+        updateUser(UpdateUserRequest(status = newStatus))
+    }
+
+    private fun reissueInviteCode() {
+        val user = currentUser ?: return
+        val serverUrl = SyncNodePreferences.getServerUrl(this) ?: return
+        val authToken = SyncNodePreferences.getAuthToken(this) ?: return
+        val fp = SyncNodePreferences.getTlsFingerprint(this)
+
+        lifecycleScope.launch {
+            val res = httpClient.reissueInvite(serverUrl, authToken, userId, fp)
+            res.onSuccess { inviteResult ->
+                showReissuedInviteDialog(user.displayName, inviteResult.inviteCode, inviteResult.qrPayload)
+            }.onFailure { err ->
+                Toast.makeText(this@UserDetailActivity, "Failed to reissue invite: ${err.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun showReissuedInviteDialog(displayName: String, code: String, qrPayload: String) {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.bottom_sheet_add_user, null)
+        val containerForm = dialogView.findViewById<View>(R.id.containerForm)
+        val containerResult = dialogView.findViewById<View>(R.id.containerResult)
+        containerForm.visibility = View.GONE
+        containerResult.visibility = View.VISIBLE
+
+        val tvTitle = dialogView.findViewById<TextView>(R.id.tvInviteForUser)
+        val tvCode = dialogView.findViewById<TextView>(R.id.tvInviteCode)
+        val tvExpiry = dialogView.findViewById<TextView>(R.id.tvExpiryCountdown)
+        val btnCopy = dialogView.findViewById<View>(R.id.btnCopyInviteCode)
+        val btnShare = dialogView.findViewById<View>(R.id.btnShareInvite)
+        val btnDone = dialogView.findViewById<View>(R.id.btnCloseSheet)
+        val ivQr = dialogView.findViewById<ImageView>(R.id.ivInviteQr)
+
+        tvTitle.text = "New Invite for $displayName"
+        tvCode.text = code
+        tvExpiry.text = "Expires in 24 hours · Single use"
+
+        lifecycleScope.launch {
+            val qrBitmap = QrCodeGenerator.generateQrBitmap(qrPayload, size = 512)
+            if (qrBitmap != null) {
+                ivQr.setImageBitmap(qrBitmap)
+                ivQr.visibility = View.VISIBLE
+            } else {
+                ivQr.visibility = View.GONE
+            }
+        }
+
+        var dialog: AlertDialog? = null
+
+        btnCopy.setOnClickListener {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Invite Code", code))
+            Toast.makeText(this, "Invite code copied", Toast.LENGTH_SHORT).show()
+        }
+
+        btnShare.setOnClickListener {
+            val shareText = "Join my private photo vault!\n\n" +
+                "1. Open PiPhotos on your phone.\n" +
+                "2. In Backup -> Connect, enter code: $code\n\n" +
+                "Pairing Link: $qrPayload"
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "PiPhotos Vault Invite")
+                putExtra(Intent.EXTRA_TEXT, shareText)
+            }
+            startActivity(Intent.createChooser(sendIntent, "Share Vault Invite"))
+        }
+
+        btnDone.setOnClickListener {
+            dialog?.dismiss()
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .show()
+    }
+
+    private fun showDeleteUserDialog() {
+        val user = currentUser ?: return
+        val cbPermanent = CheckBox(this).apply {
+            text = "Delete backed-up files permanently"
+            setPadding(32, 16, 32, 16)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Remove ${user.displayName} from Node?")
+            .setMessage("Revokes vault access for this user. By default, files are safely kept in the archive folder. Check below to permanently delete files.")
+            .setView(cbPermanent)
+            .setPositiveButton("Remove User") { _, _ ->
+                val serverUrl = SyncNodePreferences.getServerUrl(this) ?: return@setPositiveButton
+                val authToken = SyncNodePreferences.getAuthToken(this) ?: return@setPositiveButton
+                val fp = SyncNodePreferences.getTlsFingerprint(this)
+
+                lifecycleScope.launch {
+                    val res = httpClient.deleteAdminUser(
+                        endpointUrl = serverUrl,
+                        authToken = authToken,
+                        userId = userId,
+                        deleteFiles = cbPermanent.isChecked,
+                        expectedFingerprint = fp
+                    )
+                    res.onSuccess {
+                        Toast.makeText(this@UserDetailActivity, "User removed from node", Toast.LENGTH_SHORT).show()
+                        finish()
+                    }.onFailure { err ->
+                        val msg = if (err.message?.contains("last_owner_protected") == true) {
+                            "Cannot delete the last active owner."
+                        } else {
+                            err.localizedMessage ?: "Delete failed"
+                        }
+                        Toast.makeText(this@UserDetailActivity, msg, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     companion object {

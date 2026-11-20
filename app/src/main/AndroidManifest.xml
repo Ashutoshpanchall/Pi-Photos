@@ -70,6 +70,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".UsersAndStorageActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".InviteUserActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />

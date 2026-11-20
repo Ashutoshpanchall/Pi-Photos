@@ -131,6 +131,26 @@ class BackupFragment : Fragment() {
 
         binding.btnErrorAction.setOnClickListener {
             val ctx = requireContext()
+            val state = SyncRepository.getInstance(ctx).syncState.value
+            val err = state.lastError ?: ""
+            if (err.contains("quota_exceeded") || err.contains("Vault is full") || err.contains("Storage Limit Reached")) {
+                val quotaBytes = SyncNodePreferences.getQuotaBytes(ctx)
+                val usedBytes = SyncNodePreferences.getUsedBytes(ctx)
+                val quotaMsg = if (quotaBytes <= 0L) {
+                    "Vault physical storage is full. Please free up space on the storage node."
+                } else {
+                    val usedGb = "%.2f".format(usedBytes / (1024.0 * 1024.0 * 1024.0))
+                    val quotaGb = "%.2f".format(quotaBytes / (1024.0 * 1024.0 * 1024.0))
+                    "You have used $usedGb GB of your $quotaGb GB quota. Please contact the vault owner to increase your quota."
+                }
+                androidx.appcompat.app.AlertDialog.Builder(ctx)
+                    .setTitle("Storage Limit Reached")
+                    .setMessage(quotaMsg)
+                    .setPositiveButton("OK", null)
+                    .show()
+                return@setOnClickListener
+            }
+
             if (SyncNodePreferences.isPaired(ctx)) {
                 SyncRepository.getInstance(ctx).retryAllFailed()
                 MediaSyncWorker.enqueueImmediateSync(ctx, force = true)
@@ -345,20 +365,40 @@ class BackupFragment : Fragment() {
 
                 // Show readable error banner with clear action
                 binding.cardErrorBanner.visibility = View.VISIBLE
-                binding.tvErrorBannerTitle.text = "Attention Required"
-                binding.tvErrorBannerMessage.text = state.lastError
-                binding.btnErrorAction.text = "Retry Now"
+                val err = state.lastError ?: ""
+                if (err.contains("user_disabled") || err.contains("Account disabled")) {
+                    binding.tvErrorBannerTitle.text = "Account Disabled"
+                    binding.tvErrorBannerMessage.text = "Your account has been disabled by the vault owner."
+                    binding.btnErrorAction.visibility = View.GONE
+                } else if (err.contains("quota_exceeded") || err.contains("Vault is full")) {
+                    binding.tvErrorBannerTitle.text = "Storage Limit Reached"
+                    binding.tvErrorBannerMessage.text = "Vault storage quota exceeded. Contact the vault owner."
+                    binding.btnErrorAction.visibility = View.VISIBLE
+                    binding.btnErrorAction.text = "Check Quota"
+                } else {
+                    binding.tvErrorBannerTitle.text = "Attention Required"
+                    binding.tvErrorBannerMessage.text = state.lastError
+                    binding.btnErrorAction.visibility = View.VISIBLE
+                    binding.btnErrorAction.text = "Retry Now"
+                }
             } else {
                 binding.cardErrorBanner.visibility = View.GONE
+                val isMember = !SyncNodePreferences.isOwner(context)
+                val memberName = SyncNodePreferences.getDisplayName(context).ifEmpty { "Member" }
+                val memberQuotaBytes = SyncNodePreferences.getQuotaBytes(context)
+                val memberUsedBytes = SyncNodePreferences.getUsedBytes(context)
+                val memberQuotaStr = if (memberQuotaBytes == 0L) "Unlimited" else formatBytes(memberQuotaBytes)
+                val memberUsageStr = "Joined as $memberName · ${formatBytes(memberUsedBytes)} of $memberQuotaStr used"
+
                 if (state.isAllBackedUp) {
                     binding.tvBackupProgressTitle.text = "All Photos Backed Up"
-                    binding.tvBackupProgressSubtitle.text = "All ${state.totalCount} items synced with node"
+                    binding.tvBackupProgressSubtitle.text = if (isMember) memberUsageStr else "All ${state.totalCount} items synced with node"
                 } else if (state.doneCount > 0) {
                     binding.tvBackupProgressTitle.text = "Ready to Back Up"
-                    binding.tvBackupProgressSubtitle.text = "${state.doneCount} of ${state.totalCount} backed up"
+                    binding.tvBackupProgressSubtitle.text = if (isMember) memberUsageStr else "${state.doneCount} of ${state.totalCount} backed up"
                 } else {
                     binding.tvBackupProgressTitle.text = "Ready to Back Up"
-                    binding.tvBackupProgressSubtitle.text = "Connected · Ready to sync"
+                    binding.tvBackupProgressSubtitle.text = if (isMember) memberUsageStr else "Connected · Ready to sync"
                 }
             }
         }

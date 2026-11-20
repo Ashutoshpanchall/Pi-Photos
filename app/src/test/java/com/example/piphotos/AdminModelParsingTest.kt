@@ -7,6 +7,8 @@ import com.example.piphotos.net.CreateUserResult
 import com.example.piphotos.net.InviteResult
 import com.example.piphotos.net.OpenPairingResult
 import com.example.piphotos.net.UserOverview
+import com.example.piphotos.net.toAdminDeviceSummary
+import com.example.piphotos.net.toAdminUser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -241,5 +243,83 @@ class AdminModelParsingTest {
         assertEquals(original.id, copy.id)
         assertEquals(original.quotaBytes, copy.quotaBytes)
         assertFalse(original == copy)
+    }
+
+    @Test
+    fun `MeResponse stores role, quota and device details correctly`() {
+        val me = com.example.piphotos.net.MeResponse(
+            userId = "usr_owner_1",
+            displayName = "Alice Owner",
+            role = "owner",
+            quotaBytes = 0L,
+            usedBytes = 10485760L,
+            deviceId = "dev_123",
+            deviceName = "Alice Phone"
+        )
+        assertEquals("usr_owner_1", me.userId)
+        assertEquals("Alice Owner", me.displayName)
+        assertEquals("owner", me.role)
+        assertEquals(0L, me.quotaBytes)
+        assertEquals(10485760L, me.usedBytes)
+        assertEquals("dev_123", me.deviceId)
+        assertEquals("Alice Phone", me.deviceName)
+    }
+
+    @Test
+    fun `FileInfo holds file attributes accurately`() {
+        val file = com.example.piphotos.net.FileInfo(
+            id = 42L,
+            userId = "usr_abc",
+            deviceId = "dev_xyz",
+            folder = "Camera",
+            relativePath = "IMG_001.jpg",
+            sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            size = 204800L,
+            dateTaken = 1732089600L,
+            uploadedAt = "2026-11-20T10:00:00+00:00"
+        )
+        assertEquals(42L, file.id)
+        assertEquals("usr_abc", file.userId)
+        assertEquals("Camera", file.folder)
+        assertEquals("IMG_001.jpg", file.relativePath)
+        assertEquals(204800L, file.size)
+        assertEquals(1732089600L, file.dateTaken)
+    }
+
+    @Test
+    fun `toAdminUser parses null last_seen_at as null not string null`() {
+        val json = org.json.JSONObject("""
+            {
+                "id": "usr_99",
+                "name": "NeverSeen",
+                "display_name": "Never Seen",
+                "slug": "never-seen",
+                "role": "member",
+                "status": "active",
+                "quota_bytes": 1000,
+                "used_bytes": 0,
+                "file_count": 0,
+                "devices_count": 0,
+                "last_seen_at": null
+            }
+        """.trimIndent())
+        val user = json.toAdminUser()
+        assertNull(user.lastSeenAt)
+    }
+
+    @Test
+    fun `toAdminDeviceSummary parses null last_seen_at as null not string null`() {
+        val json = org.json.JSONObject("""
+            {
+                "id": "dev_99",
+                "name": "Phone",
+                "model": "Test",
+                "slug": "phone",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "last_seen_at": null
+            }
+        """.trimIndent())
+        val dev = json.toAdminDeviceSummary()
+        assertNull(dev.lastSeenAt)
     }
 }

@@ -133,9 +133,10 @@ class NodePairingValidator(
 
         // Step 5: Pairing code
         onStepUpdate(LiveCheckStep.SUBMIT_PAIRING_CODE, LiveCheckStepState.Running)
+        val cleanCode = pairingCode.trim().uppercase()
         val pairResult = httpClient.pairDevice(
             endpointUrl = endpointUrl,
-            code = pairingCode.trim(),
+            code = cleanCode,
             deviceName = deviceName,
             deviceModel = deviceModel,
             expectedFingerprint = pinnedFp
@@ -148,6 +149,21 @@ class NodePairingValidator(
         }
         val pairData = pairResult.getOrThrow()
         onStepUpdate(LiveCheckStep.SUBMIT_PAIRING_CODE, LiveCheckStepState.Passed("Device paired successfully"))
+
+        // Fetch caller identity (/me) and cache profile
+        if (context != null) {
+            val meResult = httpClient.getMe(endpointUrl, pairData.token, pinnedFp)
+            meResult.onSuccess { me ->
+                SyncNodePreferences.saveUserProfile(
+                    context = context,
+                    role = me.role,
+                    displayName = me.displayName,
+                    quotaBytes = me.quotaBytes,
+                    usedBytes = me.usedBytes,
+                    deviceName = me.deviceName
+                )
+            }
+        }
 
         // Step 6: Free space check
         onStepUpdate(LiveCheckStep.CHECK_FREE_SPACE, LiveCheckStepState.Running)
@@ -232,11 +248,17 @@ class NodePairingValidator(
                         "TLS certificate validation failed: ${error.message}"
                     }
                 is HttpException -> {
-                    when (error.code) {
-                        401 -> "Incorrect pairing code. (Note: code invalidates after 5 failed attempts)."
-                        409 -> "Pairing is closed on the server. Open pairing in the server console first."
-                        429 -> "Too many pairing attempts. Please wait a minute before retrying."
-                        507 -> "Storage node storage quota or disk space exceeded."
+                    val msg = error.message ?: ""
+                    when {
+                        msg.contains("invite_expired") -> "Invite expired. Ask the vault owner to re-issue an invite."
+                        msg.contains("invite_used") -> "Invite already used."
+                        msg.contains("code_invalidated") -> "Wrong code (pairing code invalidated after 5 failed attempts)."
+                        msg.contains("pairing_locked") -> "Pairing is temporarily locked across all IPs due to excessive failed attempts. Please wait 10 minutes."
+                        msg.contains("user_disabled") -> "Account disabled by vault owner."
+                        msg.contains("quota_exceeded") || error.code == 507 -> "Vault is full (storage quota or disk reserve exceeded)."
+                        error.code == 409 -> "Pairing is closed on the server."
+                        error.code == 429 -> "Too many pairing attempts. Please wait before retrying."
+                        error.code == 401 -> "Wrong code (invalid or expired)."
                         else -> error.message ?: "Server returned HTTP ${error.code}"
                     }
                 }

@@ -33,6 +33,11 @@ object SyncNodePreferences {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_SERVER_ID = "server_id"
     private const val KEY_LAST_SEEN_AT = "last_seen_at_ms"
+    private const val KEY_USER_ROLE = "user_role"
+    private const val KEY_DISPLAY_NAME = "display_name"
+    private const val KEY_QUOTA_BYTES = "quota_bytes"
+    private const val KEY_USED_BYTES = "used_bytes"
+    private const val KEY_DEVICE_NAME = "device_name"
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -96,6 +101,52 @@ object SyncNodePreferences {
 
     fun getLastSeenTimestamp(context: Context): Long {
         return getPrefs(context).getLong(KEY_LAST_SEEN_AT, 0L)
+    }
+
+    fun saveUserProfile(
+        context: Context,
+        role: String,
+        displayName: String,
+        quotaBytes: Long = 0L,
+        usedBytes: Long = 0L,
+        deviceName: String = ""
+    ) {
+        getPrefs(context).edit()
+            .putString(KEY_USER_ROLE, role)
+            .putString(KEY_DISPLAY_NAME, displayName)
+            .putLong(KEY_QUOTA_BYTES, quotaBytes)
+            .putLong(KEY_USED_BYTES, usedBytes)
+            .putString(KEY_DEVICE_NAME, deviceName)
+            .apply()
+    }
+
+    fun getUserRole(context: Context): String {
+        return getPrefs(context).getString(KEY_USER_ROLE, "owner") ?: "owner"
+    }
+
+    fun isOwner(context: Context): Boolean {
+        return getUserRole(context).equals("owner", ignoreCase = true)
+    }
+
+    fun getDisplayName(context: Context): String {
+        return getPrefs(context).getString(KEY_DISPLAY_NAME, "") ?: ""
+    }
+
+    fun getQuotaBytes(context: Context): Long {
+        return getPrefs(context).getLong(KEY_QUOTA_BYTES, 0L)
+    }
+
+    fun getUsedBytes(context: Context): Long {
+        return getPrefs(context).getLong(KEY_USED_BYTES, 0L)
+    }
+
+    fun updateUsedBytes(context: Context, usedBytes: Long) {
+        getPrefs(context).edit().putLong(KEY_USED_BYTES, usedBytes.coerceAtLeast(0L)).apply()
+    }
+
+    fun incrementUsedBytes(context: Context, delta: Long) {
+        val current = getUsedBytes(context)
+        getPrefs(context).edit().putLong(KEY_USED_BYTES, (current + delta).coerceAtLeast(0L)).apply()
     }
 
     fun clearPairedNode(context: Context) {

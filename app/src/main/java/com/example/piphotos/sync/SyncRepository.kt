@@ -281,7 +281,9 @@ class SyncRepository private constructor(
                         if (uploadResult.isSuccess) {
                             uploadSuccess = true
                             uploadedCount++
-                            currentUploadedBytes += (freshEntity.size - freshEntity.partOffset)
+                            val addedBytes = (freshEntity.size - freshEntity.partOffset).coerceAtLeast(0L)
+                            currentUploadedBytes += addedBytes
+                            SyncNodePreferences.incrementUsedBytes(context, addedBytes)
                             ledgerDao.markDone(freshEntity.mediaId, System.currentTimeMillis())
                             refreshSummary()
                         } else {
@@ -320,6 +322,22 @@ class SyncRepository private constructor(
             }
 
             SyncNodePreferences.setLastSyncTimestamp(context, System.currentTimeMillis())
+            val serverUrl = SyncNodePreferences.getServerUrl(context)
+            val authToken = SyncNodePreferences.getAuthToken(context)
+            val fp = SyncNodePreferences.getTlsFingerprint(context)
+            if (!serverUrl.isNullOrEmpty() && !authToken.isNullOrEmpty()) {
+                val meResult = httpClient.getMe(serverUrl, authToken, fp)
+                meResult.onSuccess { me ->
+                    SyncNodePreferences.saveUserProfile(
+                        context,
+                        role = me.role,
+                        displayName = me.displayName,
+                        quotaBytes = me.quotaBytes,
+                        usedBytes = me.usedBytes,
+                        deviceName = me.deviceName
+                    )
+                }
+            }
             SyncOutcome.Success(uploadedCount, skippedCount)
         } catch (e: Exception) {
             val syncErr = SyncError.fromThrowable(e)
@@ -450,7 +468,36 @@ class SyncRepository private constructor(
             ?: return@withContext Result.failure(IllegalStateException("No auth token"))
         val fingerprint = SyncNodePreferences.getTlsFingerprint(context)
 
-        httpClient.getStatus(serverUrl, authToken, fingerprint)
+        val statusRes = httpClient.getStatus(serverUrl, authToken, fingerprint)
+        if (statusRes.isSuccess) {
+            fetchUserProfile()
+        }
+        statusRes
+    }
+
+    suspend fun fetchUserProfile(): Result<com.example.piphotos.net.MeResponse> = withContext(Dispatchers.IO) {
+        val isConfigured = SyncNodePreferences.isConfigured(context)
+        if (!isConfigured) {
+            return@withContext Result.failure(IllegalStateException("No node paired"))
+        }
+        val serverUrl = SyncNodePreferences.getServerUrl(context)
+            ?: return@withContext Result.failure(IllegalStateException("No server URL"))
+        val authToken = SyncNodePreferences.getAuthToken(context)
+            ?: return@withContext Result.failure(IllegalStateException("No auth token"))
+        val fingerprint = SyncNodePreferences.getTlsFingerprint(context)
+
+        val res = httpClient.getMe(serverUrl, authToken, fingerprint)
+        res.onSuccess { me ->
+            SyncNodePreferences.saveUserProfile(
+                context = context,
+                role = me.role,
+                displayName = me.displayName,
+                quotaBytes = me.quotaBytes,
+                usedBytes = me.usedBytes,
+                deviceName = me.deviceName
+            )
+        }
+        res
     }
 
     companion object {

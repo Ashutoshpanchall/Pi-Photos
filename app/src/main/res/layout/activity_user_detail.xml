@@ -344,17 +344,70 @@
                 android:textSize="12sp"
                 android:textStyle="bold" />
 
+            <!-- Rename User Button -->
+            <TextView
+                android:id="@+id/btnRenameUser"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:background="@drawable/bg_card_white"
+                android:gravity="center"
+                android:text="Rename User..."
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
             <!-- Modify Storage Quota Button -->
             <TextView
                 android:id="@+id/btnAdjustQuota"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
+                android:layout_marginTop="8dp"
                 android:background="@drawable/bg_card_white"
                 android:gravity="center"
                 android:text="Modify Storage Limit..."
                 android:textColor="@color/primary_blue"
                 android:textSize="14sp"
                 android:textStyle="bold" />
+
+            <!-- Re-issue Invite Button -->
+            <TextView
+                android:id="@+id/btnReissueInvite"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_card_white"
+                android:gravity="center"
+                android:text="Re-issue Invite Code..."
+                android:textColor="@color/primary_blue"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <!-- SECTION: Paired Devices -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:layout_marginBottom="8dp"
+                android:text="PAIRED DEVICES"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:id="@+id/containerDevicesList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/tvNoDevices"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="12dp"
+                android:text="No devices paired yet"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:visibility="gone" />
 
             <!-- Admin Account Protection Notice -->
             <LinearLayout

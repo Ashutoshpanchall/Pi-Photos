@@ -419,6 +419,303 @@ class PiHttpClient(
         }
     }
 
+    suspend fun getMe(
+        endpointUrl: String,
+        authToken: String,
+        expectedFingerprint: String? = null
+    ): Result<MeResponse> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/me")
+                .header("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to fetch user profile HTTP ${resp.code}: $bodyStr"))
+                }
+                val json = JSONObject(bodyStr)
+                Result.success(
+                    MeResponse(
+                        userId = json.getString("user_id"),
+                        displayName = json.optString("display_name", ""),
+                        role = json.optString("role", "member"),
+                        quotaBytes = json.optLong("quota_bytes", 0L),
+                        usedBytes = json.optLong("used_bytes", 0L),
+                        deviceId = json.optString("device_id", ""),
+                        deviceName = json.optString("device_name", "")
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun listAdminUsers(
+        endpointUrl: String,
+        authToken: String,
+        expectedFingerprint: String? = null
+    ): Result<List<AdminUser>> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/admin/users")
+                .header("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to list users HTTP ${resp.code}: $bodyStr"))
+                }
+                val arr = JSONArray(bodyStr)
+                val list = (0 until arr.length()).map { i ->
+                    arr.getJSONObject(i).toAdminUser()
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createAdminUser(
+        endpointUrl: String,
+        authToken: String,
+        displayName: String,
+        quotaBytes: Long? = null,
+        unlimited: Boolean = false,
+        expectedFingerprint: String? = null
+    ): Result<CreateUserResult> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val payload = JSONObject().apply {
+                put("display_name", displayName)
+                if (quotaBytes != null) put("quota_bytes", quotaBytes)
+                if (unlimited) put("unlimited", true)
+            }
+            val reqBody = payload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/admin/users")
+                .header("Authorization", "Bearer $authToken")
+                .post(reqBody)
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to create user HTTP ${resp.code}: $bodyStr"))
+                }
+                Result.success(JSONObject(bodyStr).toCreateUserResult())
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateAdminUser(
+        endpointUrl: String,
+        authToken: String,
+        userId: String,
+        req: UpdateUserRequest,
+        force: Boolean = false,
+        expectedFingerprint: String? = null
+    ): Result<AdminUser> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val payload = JSONObject().apply {
+                if (req.displayName != null) put("display_name", req.displayName)
+                if (req.quotaBytes != null) put("quota_bytes", req.quotaBytes)
+                if (req.status != null) put("status", req.status)
+                if (req.role != null) put("role", req.role)
+            }
+            val reqBody = payload.toString().toRequestBody("application/json".toMediaType())
+            val url = "$endpointUrl/api/v1/admin/users/$userId" + if (force) "?force=true" else ""
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $authToken")
+                .patch(reqBody)
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to update user HTTP ${resp.code}: $bodyStr"))
+                }
+                Result.success(JSONObject(bodyStr).toAdminUser())
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun reissueInvite(
+        endpointUrl: String,
+        authToken: String,
+        userId: String,
+        expectedFingerprint: String? = null
+    ): Result<InviteResult> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val emptyBody = "".toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/admin/users/$userId/invite")
+                .header("Authorization", "Bearer $authToken")
+                .post(emptyBody)
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to reissue invite HTTP ${resp.code}: $bodyStr"))
+                }
+                Result.success(JSONObject(bodyStr).toInviteResult())
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteAdminUser(
+        endpointUrl: String,
+        authToken: String,
+        userId: String,
+        deleteFiles: Boolean = false,
+        expectedFingerprint: String? = null
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val url = "$endpointUrl/api/v1/admin/users/$userId?delete_files=$deleteFiles"
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $authToken")
+                .delete()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to delete user HTTP ${resp.code}: $bodyStr"))
+                }
+                Result.success(true)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun listUserDevices(
+        endpointUrl: String,
+        authToken: String,
+        userId: String,
+        expectedFingerprint: String? = null
+    ): Result<List<AdminDeviceSummary>> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/admin/users/$userId/devices")
+                .header("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to list devices HTTP ${resp.code}: $bodyStr"))
+                }
+                val arr = JSONArray(bodyStr)
+                val list = (0 until arr.length()).map { i ->
+                    arr.getJSONObject(i).toAdminDeviceSummary()
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun revokeDevice(
+        endpointUrl: String,
+        authToken: String,
+        deviceId: String,
+        expectedFingerprint: String? = null
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/admin/devices/$deviceId")
+                .header("Authorization", "Bearer $authToken")
+                .delete()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to revoke device HTTP ${resp.code}: $bodyStr"))
+                }
+                Result.success(true)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun openPairing(
+        endpointUrl: String,
+        authToken: String,
+        expectedFingerprint: String? = null
+    ): Result<OpenPairingResult> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val emptyBody = "".toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/admin/pairing/open")
+                .header("Authorization", "Bearer $authToken")
+                .post(emptyBody)
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to open pairing HTTP ${resp.code}: $bodyStr"))
+                }
+                Result.success(JSONObject(bodyStr).toOpenPairingResult())
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getAdminOverview(
+        endpointUrl: String,
+        authToken: String,
+        expectedFingerprint: String? = null
+    ): Result<AdminOverview> = withContext(Dispatchers.IO) {
+        try {
+            val (client, _) = buildClient(expectedFingerprint)
+            val request = Request.Builder()
+                .url("$endpointUrl/api/v1/admin/overview")
+                .header("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(HttpException(resp.code, "Failed to fetch admin overview HTTP ${resp.code}: $bodyStr"))
+                }
+                Result.success(JSONObject(bodyStr).toAdminOverview())
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: PiHttpClient? = null
@@ -441,8 +738,32 @@ class OffsetMismatchException(val serverOffset: Long, message: String) : IOExcep
 class HttpException(val code: Int, message: String) : IOException(message)
 
 // ---------------------------------------------------------------------------
-// Phase U1: Admin / User Manager models
+// Phase U1 / U1.1 / U2: User profile & Admin models
 // ---------------------------------------------------------------------------
+
+/** Caller's own profile as returned by GET /api/v1/me. */
+data class MeResponse(
+    val userId: String,
+    val displayName: String,
+    val role: String,          // "owner" | "member"
+    val quotaBytes: Long,      // 0 = unlimited
+    val usedBytes: Long,
+    val deviceId: String,
+    val deviceName: String
+)
+
+/** User file metadata as returned by GET /api/v1/files. */
+data class FileInfo(
+    val id: Long,
+    val userId: String,
+    val deviceId: String,
+    val folder: String,
+    val relativePath: String,
+    val sha256: String,
+    val size: Long,
+    val dateTaken: Long?,
+    val uploadedAt: String
+)
 
 /** Summary of a user as returned by GET /api/v1/admin/users. */
 data class AdminUser(
@@ -533,7 +854,7 @@ internal fun JSONObject.toAdminUser(): AdminUser = AdminUser(
     usedBytes = optLong("used_bytes", 0L),
     fileCount = optInt("file_count", 0),
     devicesCount = optInt("devices_count", 0),
-    lastSeenAt = optString("last_seen_at").ifEmpty { null }
+    lastSeenAt = if (isNull("last_seen_at")) null else optString("last_seen_at").takeIf { it.isNotEmpty() && it != "null" }
 )
 
 internal fun JSONObject.toCreateUserResult(): CreateUserResult = CreateUserResult(
@@ -555,7 +876,7 @@ internal fun JSONObject.toAdminDeviceSummary(): AdminDeviceSummary = AdminDevice
     model = optString("model", ""),
     slug = optString("slug", ""),
     createdAt = optString("created_at", ""),
-    lastSeenAt = optString("last_seen_at").ifEmpty { null }
+    lastSeenAt = if (isNull("last_seen_at")) null else optString("last_seen_at").takeIf { it.isNotEmpty() && it != "null" }
 )
 
 internal fun JSONObject.toOpenPairingResult(): OpenPairingResult = OpenPairingResult(

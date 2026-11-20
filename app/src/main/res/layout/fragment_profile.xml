@@ -669,6 +669,62 @@
                 </RelativeLayout>
 
                 <View
+                    android:id="@+id/dividerUsersAndStorage"
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/divider_subtle"
+                    android:visibility="gone" />
+
+                <!-- Users & Storage (Owner Only) -->
+                <RelativeLayout
+                    android:id="@+id/rowUsersAndStorage"
+                    android:layout_width="match_parent"
+                    android:layout_height="60dp"
+                    android:visibility="gone"
+                    android:background="?attr/selectableItemBackground">
+
+                    <FrameLayout
+                        android:id="@+id/badgeUsersAndStorage"
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:layout_centerVertical="true"
+                        android:background="@drawable/bg_status_bar">
+
+                        <ImageView
+                            android:layout_width="18dp"
+                            android:layout_height="18dp"
+                            android:layout_gravity="center"
+                            android:src="@drawable/ic_nav_you"
+                            app:tint="@color/text_secondary" />
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_centerVertical="true"
+                        android:layout_marginStart="14dp"
+                        android:layout_toEndOf="@id/badgeUsersAndStorage"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Users &amp; Storage"
+                            android:textColor="@color/text_primary"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Manage member accounts and quotas"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </RelativeLayout>
+
+                <View
                     android:id="@+id/dividerPipeline"
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
