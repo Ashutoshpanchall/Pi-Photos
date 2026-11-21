@@ -133,10 +133,37 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _setup_logging(paths: ServerPaths) -> None:
+    """Configure rotating file logger in <data>/logs/server.log."""
+    from logging.handlers import RotatingFileHandler
+
+    paths.logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = paths.logs_dir / "server.log"
+
+    root_logger = logging.getLogger()
+    for h in root_logger.handlers:
+        if isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", None) == str(log_file):
+            return
+
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s")
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    for uvi in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        logging.getLogger(uvi).addHandler(file_handler)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Run the server in the foreground."""
     paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
     paths.ensure_dirs()
+    _setup_logging(paths)
 
     # Pass paths via environment so lifespan and endpoints pick them up seamlessly
     os.environ["PIPHOTOS_DATA_DIR"] = str(paths.data_dir)
@@ -310,12 +337,63 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_install_service(args: argparse.Namespace) -> int:
+    """Install auto-start background service and firewall rules."""
+    from .service import install_service
+    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
+    success, msg = install_service(paths, is_system=getattr(args, "system", False), no_firewall=getattr(args, "no_firewall", False))
+    print(msg)
+    return 0 if success else 1
+
+
+def cmd_uninstall_service(args: argparse.Namespace) -> int:
+    """Uninstall auto-start background service and remove firewall rules."""
+    from .service import uninstall_service
+    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
+    success, msg = uninstall_service(paths, is_system=getattr(args, "system", False), no_firewall=getattr(args, "no_firewall", False))
+    print(msg)
+    return 0 if success else 1
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """Start registered service."""
+    from .service import start_service
+    success, msg = start_service(is_system=getattr(args, "system", False))
+    print(msg)
+    return 0 if success else 1
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    """Stop registered service."""
+    from .service import stop_service
+    success, msg = stop_service(is_system=getattr(args, "system", False))
+    print(msg)
+    return 0 if success else 1
+
+
+def cmd_restart(args: argparse.Namespace) -> int:
+    """Restart registered service."""
+    from .service import restart_service
+    success, msg = restart_service(is_system=getattr(args, "system", False))
+    print(msg)
+    return 0 if success else 1
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Display or tail server logs."""
+    from .service import stream_logs
+    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
+    stream_logs(paths, follow=getattr(args, "follow", False), lines=getattr(args, "lines", 50))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build command-line parser with all subcommands."""
     parser = argparse.ArgumentParser(
         prog="piphotos-server",
         description="PiPhotos self-hosted photo backup server CLI",
     )
+    parser.add_argument("--version", "-v", action="version", version=f"piphotos-server {VERSION}")
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
 
     # setup
@@ -346,6 +424,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_info = subparsers.add_parser("info", help="Display server connection banner, fingerprint, and QR code")
     p_info.add_argument("--data-dir", type=str, default=None, help="Data directory")
 
+    # install-service
+    p_ins = subparsers.add_parser("install-service", help="Install auto-start background service and firewall rules")
+    p_ins.add_argument("--system", action="store_true", help="Install system-level service rather than user-level")
+    p_ins.add_argument("--no-firewall", action="store_true", help="Skip automatic firewall rule configuration")
+    p_ins.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
+    # uninstall-service
+    p_unins = subparsers.add_parser("uninstall-service", help="Uninstall background service and remove firewall rules")
+    p_unins.add_argument("--system", action="store_true", help="Target system-level service")
+    p_unins.add_argument("--no-firewall", action="store_true", help="Skip firewall rule removal")
+    p_unins.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
+    # start, stop, restart
+    p_start = subparsers.add_parser("start", help="Start background service")
+    p_start.add_argument("--system", action="store_true", help="Target system-level service")
+
+    p_stop = subparsers.add_parser("stop", help="Stop background service")
+    p_stop.add_argument("--system", action="store_true", help="Target system-level service")
+
+    p_restart = subparsers.add_parser("restart", help="Restart background service")
+    p_restart.add_argument("--system", action="store_true", help="Target system-level service")
+
+    # logs
+    p_logs = subparsers.add_parser("logs", help="View server logs")
+    p_logs.add_argument("-f", "--follow", action="store_true", help="Follow log output")
+    p_logs.add_argument("-n", "--lines", type=int, default=50, help="Number of lines to show (default: 50)")
+    p_logs.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
     # version
     subparsers.add_parser("version", help="Show server software version")
 
@@ -368,6 +474,12 @@ def main(args: Optional[list[str]] = None) -> int:
         "status": cmd_status,
         "info": cmd_info,
         "version": cmd_version,
+        "install-service": cmd_install_service,
+        "uninstall-service": cmd_uninstall_service,
+        "start": cmd_start,
+        "stop": cmd_stop,
+        "restart": cmd_restart,
+        "logs": cmd_logs,
     }
 
     handler = handlers.get(parsed.subcommand)
