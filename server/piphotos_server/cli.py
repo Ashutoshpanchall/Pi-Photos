@@ -379,6 +379,102 @@ def cmd_restart(args: argparse.Namespace) -> int:
     return 0 if success else 1
 
 
+def _find_uv() -> Optional[str]:
+    """Find Astral uv binary on PATH or standard user install locations."""
+    found = shutil.which("uv")
+    if found:
+        return found
+    candidates = [
+        Path.home() / ".local" / "bin" / ("uv.exe" if sys.platform == "win32" else "uv"),
+        Path.home() / ".cargo" / "bin" / ("uv.exe" if sys.platform == "win32" else "uv"),
+    ]
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            candidates.append(Path(local_app_data) / "uv" / "bin" / "uv.exe")
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    return None
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Update piphotos-server package and restart background service."""
+    ref = getattr(args, "ref", None) or "main"
+    git_url = f"git+https://github.com/Ashutoshpanchall/Pi-Photos@{ref}#subdirectory=server"
+    print(f"Updating piphotos-server from {ref}...")
+
+    import subprocess
+    uv_bin = _find_uv()
+    if uv_bin:
+        cmd = [uv_bin, "tool", "install", "--force", git_url]
+    else:
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", git_url]
+
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"Update failed:\n{res.stderr or res.stdout}")
+        return 1
+
+    print("Package updated successfully.")
+
+    # Restart service if installed
+    from .service import restart_service
+    success, msg = restart_service(is_system=getattr(args, "system", False))
+    print(f"Service status: {msg}")
+    return 0
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Uninstall background service, firewall rules, and piphotos-server tool."""
+    from .service import uninstall_service
+    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
+
+    print("Stopping and removing PiPhotos service and firewall rules...")
+    success, msg = uninstall_service(paths, is_system=getattr(args, "system", False), no_firewall=getattr(args, "no_firewall", False))
+    print(msg)
+
+    # Uninstall tool from uv if uv is available
+    import subprocess
+    uv_bin = _find_uv()
+    if uv_bin:
+        subprocess.run([uv_bin, "tool", "uninstall", "piphotos-server"], capture_output=True, text=True)
+
+    # Purge data only if explicitly requested
+    if getattr(args, "purge_data", False):
+        if paths.data_dir.exists():
+            folder_name = paths.data_dir.name
+            if not folder_name or paths.data_dir.parent == paths.data_dir:
+                print(f"Error: Refusing to purge filesystem root: {paths.data_dir}")
+                return 1
+
+            print(f"\nWARNING: You requested --purge-data. This will permanently delete:")
+            print(f"  - Database: {paths.db_path}")
+            print(f"  - Certificates: {paths.certs_dir}")
+            print(f"  - Entire data directory: {paths.data_dir}")
+            try:
+                paths.storage_dir.relative_to(paths.data_dir)
+                print(f"  - Storage / photos: {paths.storage_dir}")
+            except ValueError:
+                print(f"  - Storage / photos: external ({paths.storage_dir}) - will be PRESERVED")
+
+            confirm = input(f"\nType the folder name '{folder_name}' to permanently delete data: ").strip()
+            if confirm == folder_name:
+                shutil.rmtree(paths.data_dir)
+                print(f"Permanently purged data directory: {paths.data_dir}")
+                try:
+                    paths.storage_dir.relative_to(paths.data_dir)
+                except ValueError:
+                    print(f"Notice: External storage at {paths.storage_dir} was preserved.")
+            else:
+                print("Confirmation mismatch. Data directory was NOT deleted.")
+    else:
+        print(f"\nPiPhotos server uninstalled. Your photos and database remain safe at: {paths.data_dir}")
+        print("To completely delete data, re-run with '--purge-data'.")
+
+    return 0
+
+
 def cmd_logs(args: argparse.Namespace) -> int:
     """Display or tail server logs."""
     from .service import stream_logs
@@ -452,6 +548,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_logs.add_argument("-n", "--lines", type=int, default=50, help="Number of lines to show (default: 50)")
     p_logs.add_argument("--data-dir", type=str, default=None, help="Data directory")
 
+    # update
+    p_update = subparsers.add_parser("update", help="Update server software to latest release or specified git ref")
+    p_update.add_argument("--ref", type=str, default="main", help="Git branch, tag, or commit to update to (default: main)")
+    p_update.add_argument("--system", action="store_true", help="Restart system-level service")
+
+    # uninstall
+    p_uninstall = subparsers.add_parser("uninstall", help="Uninstall server service, firewall rules, and tool")
+    p_uninstall.add_argument("--purge-data", action="store_true", help="Permanently delete all server data and photos (requires confirmation)")
+    p_uninstall.add_argument("--system", action="store_true", help="Target system-level service")
+    p_uninstall.add_argument("--no-firewall", action="store_true", help="Skip firewall rule removal")
+    p_uninstall.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
     # version
     subparsers.add_parser("version", help="Show server software version")
 
@@ -480,6 +588,8 @@ def main(args: Optional[list[str]] = None) -> int:
         "stop": cmd_stop,
         "restart": cmd_restart,
         "logs": cmd_logs,
+        "update": cmd_update,
+        "uninstall": cmd_uninstall,
     }
 
     handler = handlers.get(parsed.subcommand)
