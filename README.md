@@ -149,23 +149,7 @@ Or open the folder in Android Studio and press **Run**. Grant the photo and vide
 
 You only need this if you want backup. The gallery works without it.
 
-#### Quick One-Command Setup
-
-**macOS / Linux / Raspberry Pi**:
-```bash
-curl -fsSL https://raw.githubusercontent.com/Ashutoshpanchall/Pi-Photos/main/install/install.sh | sh
-```
-
-**Windows (PowerShell)**:
-```powershell
-irm https://raw.githubusercontent.com/Ashutoshpanchall/Pi-Photos/main/install/install.ps1 | iex
-```
-
-See [docs/SERVER_SETUP.md](docs/SERVER_SETUP.md) for full server configuration, service control, firewall rules, and self-diagnostics with `piphotos-server doctor`.
-
----
-
-#### Manual Setup from Source
+> For one-command setup (macOS, Linux, Windows, Raspberry Pi), background services, and self-checks, see [docs/SERVER_SETUP.md](docs/SERVER_SETUP.md).
 
 Requirements: Python 3 (developed and tested with 3.10+) and a machine on the same Wi-Fi network as your phone.
 
