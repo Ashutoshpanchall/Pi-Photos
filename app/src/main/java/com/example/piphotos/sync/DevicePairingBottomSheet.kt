@@ -16,6 +16,8 @@ import androidx.lifecycle.lifecycleScope
 import com.example.piphotos.R
 import com.example.piphotos.databinding.BottomSheetDevicePairingBinding
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -33,6 +35,13 @@ class DevicePairingBottomSheet(
     private var discovery: PiDeviceDiscovery? = null
     private var validator: NodePairingValidator? = null
     private var selectedTlsFingerprint: String? = null
+
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        if (!contents.isNullOrBlank()) {
+            handleScannedQrPayload(contents)
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -70,7 +79,11 @@ class DevicePairingBottomSheet(
         }
 
         binding.btnScanQr.setOnClickListener {
-            showQrInputDialog()
+            launchQrScanner()
+        }
+
+        binding.btnFormScanQr.setOnClickListener {
+            launchQrScanner()
         }
 
         binding.btnCancelForm.setOnClickListener {
@@ -170,6 +183,44 @@ class DevicePairingBottomSheet(
             "Enter Server Address & Pairing Code"
         }
         binding.etPairingCode.requestFocus()
+    }
+
+    private fun launchQrScanner() {
+        val options = ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt("Scan PiPhotos server pairing QR code")
+            setCameraId(0)
+            setBeepEnabled(false)
+            setBarcodeImageEnabled(false)
+            setOrientationLocked(false)
+        }
+        try {
+            qrScanLauncher.launch(options)
+        } catch (e: Exception) {
+            // Fallback to manual text input dialog if camera launch fails
+            showQrInputDialog()
+        }
+    }
+
+    private fun handleScannedQrPayload(rawText: String) {
+        val parsed = NodePairingValidator.parseQrCode(rawText)
+        if (parsed != null) {
+            showManualForm(
+                host = parsed.host,
+                port = parsed.port,
+                tlsFingerprint = parsed.tlsFingerprint
+            )
+            if (!parsed.code.isNullOrEmpty()) {
+                binding.etPairingCode.setText(parsed.code)
+                startLiveVerification()
+            }
+        } else {
+            Toast.makeText(
+                requireContext(),
+                "Could not parse QR code. Ensure it is a valid PiPhotos code.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     private fun showQrInputDialog() {

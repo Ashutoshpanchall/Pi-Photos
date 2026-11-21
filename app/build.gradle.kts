@@ -65,6 +65,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("androidx.tracing:tracing:1.2.0")
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
     debugImplementation("androidx.metrics:metrics-performance:1.0.0-beta01")
