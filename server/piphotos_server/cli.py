@@ -475,6 +475,13 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Run system, storage, network, and security diagnostics."""
+    from .doctor import run_doctor
+    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
+    return run_doctor(paths, json_output=getattr(args, "json", False))
+
+
 def cmd_logs(args: argparse.Namespace) -> int:
     """Display or tail server logs."""
     from .service import stream_logs
@@ -560,6 +567,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_uninstall.add_argument("--no-firewall", action="store_true", help="Skip firewall rule removal")
     p_uninstall.add_argument("--data-dir", type=str, default=None, help="Data directory")
 
+    # doctor
+    p_doctor = subparsers.add_parser("doctor", help="Run system, storage, network, and security diagnostics")
+    p_doctor.add_argument("--json", action="store_true", help="Output diagnostics report in JSON format")
+    p_doctor.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
     # version
     subparsers.add_parser("version", help="Show server software version")
 
@@ -590,6 +602,7 @@ def main(args: Optional[list[str]] = None) -> int:
         "logs": cmd_logs,
         "update": cmd_update,
         "uninstall": cmd_uninstall,
+        "doctor": cmd_doctor,
     }
 
     handler = handlers.get(parsed.subcommand)
