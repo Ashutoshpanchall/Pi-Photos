@@ -167,8 +167,16 @@ Write-Host "Using uv at: $uvPath" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 # 4. Install / Upgrade piphotos-server
 # ---------------------------------------------------------------------------
-$packageSpec = "git+https://github.com/Ashutoshpanchall/Pi-Photos@${Ref}#subdirectory=server"
-Write-Host "`nInstalling/upgrading piphotos-server from $Ref..." -ForegroundColor Cyan
+if ((Test-Path $Ref) -or ($Ref -eq "local") -or ($Ref -eq ".")) {
+    if ($Ref -eq "local" -or $Ref -eq ".") {
+        $packageSpec = ".\server"
+    } else {
+        $packageSpec = $Ref
+    }
+} else {
+    $packageSpec = "git+https://github.com/Ashutoshpanchall/Pi-Photos@${Ref}#subdirectory=server"
+}
+Write-Host "`nInstalling/upgrading piphotos-server from $packageSpec..." -ForegroundColor Cyan
 
 & $uvPath tool install --force "$packageSpec"
 if ($LASTEXITCODE -ne 0) {

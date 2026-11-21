@@ -229,9 +229,15 @@ echo "Using uv at: $UV_BIN"
 # ---------------------------------------------------------------------------
 # 4. Install / Upgrade piphotos-server tool
 # ---------------------------------------------------------------------------
-PACKAGE_SPEC="git+https://github.com/Ashutoshpanchall/Pi-Photos@${REF}#subdirectory=server"
+if [ -d "$REF" ] || [ -f "$REF/pyproject.toml" ]; then
+  PACKAGE_SPEC="$REF"
+elif [ "$REF" = "local" ] || [ "$REF" = "." ]; then
+  PACKAGE_SPEC="./server"
+else
+  PACKAGE_SPEC="git+https://github.com/Ashutoshpanchall/Pi-Photos@${REF}#subdirectory=server"
+fi
 echo ""
-echo "Installing/upgrading piphotos-server from $REF..."
+echo "Installing/upgrading piphotos-server from $PACKAGE_SPEC..."
 "$UV_BIN" tool install --force "$PACKAGE_SPEC"
 
 # Ensure ~/.local/bin is in PATH for piphotos-server executable

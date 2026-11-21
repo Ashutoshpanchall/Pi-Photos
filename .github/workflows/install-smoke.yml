@@ -1,0 +1,146 @@
+name: Installer Smoke & Matrix Verification
+
+on:
+  push:
+    branches: [ main, 'feature/**', 'fix/**' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Lint Install Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run shellcheck on install.sh
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck install/install.sh
+
+      - name: Run PSScriptAnalyzer on install.ps1
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path install/install.ps1 -Severity Error,Warning
+          if ($results) {
+              $results | Format-Table -AutoSize
+              exit 1
+          } else {
+              Write-Host "PSScriptAnalyzer passed with 0 errors/warnings!"
+          }
+
+  smoke-matrix:
+    name: Smoke Test (${{ matrix.os }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Astral uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Run Installer Script (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          sh install/install.sh --no-service --data-dir "${{ runner.temp }}/piphotos" --yes --ref "./server"
+
+      - name: Run Installer Script (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File install/install.ps1 -NoService -DataDir "$env:TEMP\piphotos" -Yes -Ref ".\server"
+
+      - name: Start Server in Background (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          piphotos-server run --data-dir "${{ runner.temp }}/piphotos" &
+          echo $! > "${{ runner.temp }}/server.pid"
+          sleep 2
+
+      - name: Start Server in Background (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:USERPROFILE\.local\bin;$env:LOCALAPPDATA\uv\bin;$env:PATH"
+          $proc = Start-Process -FilePath "piphotos-server.exe" -ArgumentList "run --data-dir `"$env:TEMP\piphotos`"" -PassThru
+          $proc.Id | Out-File -FilePath "$env:TEMP\server.pid"
+          Start-Sleep -Seconds 2
+
+      - name: Health Check & Doctor Diagnostics (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          for i in $(seq 1 15); do
+            curl -k -s -f "https://127.0.0.1:8443/api/v1/info" >/dev/null 2>&1 && break || sleep 1
+          done
+          piphotos-server doctor --data-dir "${{ runner.temp }}/piphotos" --json
+
+      - name: Health Check & Doctor Diagnostics (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:USERPROFILE\.local\bin;$env:LOCALAPPDATA\uv\bin;$env:PATH"
+          $healthy = $false
+          for ($i = 0; $i -lt 15; $i++) {
+            try {
+              $resp = Invoke-RestMethod -Uri "https://127.0.0.1:8443/api/v1/info" -SkipCertificateCheck -TimeoutSec 2
+              if ($resp) { $healthy = $true; break }
+            } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $healthy) { Write-Error "Server failed to respond on /api/v1/info"; exit 1 }
+          piphotos-server doctor --data-dir "$env:TEMP\piphotos" --json
+
+      - name: Run E2E Smoke Upload/Resume Verification (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          python3 server/tests/e2e_smoke.py --port 8443 --data-dir "${{ runner.temp }}/piphotos"
+
+      - name: Run E2E Smoke Upload/Resume Verification (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python server/tests/e2e_smoke.py --port 8443 --data-dir "$env:TEMP\piphotos"
+
+      - name: Teardown Background Server (Unix)
+        if: always() && runner.os != 'Windows'
+        run: |
+          if [ -f "${{ runner.temp }}/server.pid" ]; then
+            kill $(cat "${{ runner.temp }}/server.pid") || true
+          fi
+
+      - name: Teardown Background Server (Windows)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:TEMP\server.pid") {
+            $pidToKill = Get-Content "$env:TEMP\server.pid"
+            Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Test Uninstall Subcommand (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          piphotos-server uninstall --data-dir "${{ runner.temp }}/piphotos"
+
+      - name: Test Uninstall Subcommand (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:USERPROFILE\.local\bin;$env:LOCALAPPDATA\uv\bin;$env:PATH"
+          piphotos-server uninstall --data-dir "$env:TEMP\piphotos"

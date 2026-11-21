@@ -1,32 +1,47 @@
 # PiPhotos Storage Node
 
-A lightweight, privacy-first storage node for backing up photos and videos from the PiPhotos Android app. Designed to run on a Raspberry Pi Zero 2 W (512 MB RAM) or any Linux/Windows/macOS system.
+A lightweight, privacy-first storage node for backing up photos and videos from the PiPhotos Android app. Designed to run on a Raspberry Pi Zero 2 W (512 MB RAM) or any Linux, macOS, or Windows system.
 
-## Quick Start
+See [docs/SERVER_SETUP.md](../docs/SERVER_SETUP.md) for the complete setup, service, and diagnostics guide.
+
+## One-Command Installation
+
+### On macOS / Linux / Raspberry Pi
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ashutoshpanchall/Pi-Photos/main/install/install.sh | sh
+```
+
+### On Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/Ashutoshpanchall/Pi-Photos/main/install/install.ps1 | iex
+```
+
+Both installers install `piphotos-server` via [uv](https://astral.sh/uv), register auto-start background services and firewall rules, run health diagnostics, and display a pairing QR code.
+
+## CLI Subcommands
+
+The server includes the `piphotos-server` CLI:
+
+- `piphotos-server setup`: Initialize configuration, certificates, and database.
+- `piphotos-server run`: Run server in foreground.
+- `piphotos-server pair`: Open a 10-minute pairing window without restarting.
+- `piphotos-server status`: Display server state, listening IPs, and disk space.
+- `piphotos-server doctor [--json]`: Run full system, network, and firewall diagnostics.
+- `piphotos-server logs [-f]`: Stream or view server logs.
+- `piphotos-server install-service`: Register auto-start service (`systemd`, `launchd`, or Windows Scheduled Task) and firewall rules.
+- `piphotos-server update`: Upgrade package to latest release and restart service.
+- `piphotos-server uninstall [--purge-data]`: Cleanly remove service and tool.
+
+## Local Development & Manual Run
 
 ### On Linux / macOS
 ```bash
-cd server
-chmod +x run.sh
 ./run.sh
 ```
 
 ### On Windows
 ```powershell
-cd server
 .\run.ps1
-```
-
-### On Raspberry Pi
-```bash
-# Install as a system service
-sudo cp piphotos.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable piphotos
-sudo systemctl start piphotos
-
-# Check status
-sudo systemctl status piphotos
 ```
 
 ## Configuration
