@@ -255,7 +255,7 @@ Uploads a file. The request body is the raw file bytes, streamed.
 
 **Error 409:** SHA-256 mismatch, offset mismatch, or upload in progress.
 
-**Error 507:** Quota exceeded or disk reserve would be breached.
+**Error 507:** `quota_exceeded` means the user's own quota is used up (the owner can raise it). `disk_full` means the node's disk is full (the owner must free space). Clients must tell the two apart.
 
 ### GET /api/v1/devices/{device_id}/folders
 
@@ -342,7 +342,9 @@ File modification time (`mtime`) is set to `date_taken` when provided.
 | 429  | `rate_limited`         | Too many requests from this IP             |
 | 429  | `pairing_locked`       | Global lockout across all IPs (20 failures)|
 | 408  | `timeout`              | Upload stream chunk read timeout (30s)     |
-| 507  | `quota_exceeded`       | User quota or disk reserve exceeded        |
+| 507  | `quota_exceeded`       | The user's storage quota is exceeded       |
+| 507  | `disk_full`            | The node's disk reserve would be breached  |
+| 400  | `bad_request`          | Invalid folder or file name                |
 | 500  | `internal_error`       | Unexpected server error                    |
 
 | 401  | `invite_expired`       | Invite code is past its expiry time         |

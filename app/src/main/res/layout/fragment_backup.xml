@@ -182,7 +182,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
                         android:layout_marginBottom="14dp"
-                        android:text="Pair your personal home storage whenever you want automated, encrypted backups."
+                        android:text="Pair your own home storage for automatic backups over an encrypted connection."
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 

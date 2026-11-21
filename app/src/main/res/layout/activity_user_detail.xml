@@ -303,11 +303,13 @@
                 </LinearLayout>
 
                 <View
+                    android:visibility="gone"
                     android:layout_width="1dp"
                     android:layout_height="32dp"
                     android:background="@color/divider_subtle" />
 
                 <LinearLayout
+                    android:visibility="gone"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"

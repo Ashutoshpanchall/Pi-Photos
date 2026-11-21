@@ -1442,3 +1442,94 @@ class TestUserManager:
         # Owner calls GET /api/v1/files -> does NOT contain Alice's file
         owner_files = self.client.get("/api/v1/files", headers=owner_headers).json()
         assert not any(f["id"] == f_id for f in owner_files)
+
+
+# ---------------------------------------------------------------------------
+# Phase H hardening: invalid names are 400 (never 500); disk-full has its own code
+# ---------------------------------------------------------------------------
+
+class TestHardening:
+    def setup_method(self):
+        self.tmp = tempfile.mkdtemp()
+        os.environ["PIPHOTOS_STORAGE"] = os.path.join(self.tmp, "storage")
+        os.environ["PIPHOTOS_DB"] = os.path.join(self.tmp, "test.db")
+        os.environ["PIPHOTOS_CERTS"] = os.path.join(self.tmp, "certs")
+        os.environ["PIPHOTOS_CONFIG"] = os.path.join(self.tmp, "nonexistent.json")
+        os.environ["PIPHOTOS_NO_MDNS"] = "1"
+        os.environ["PIPHOTOS_NO_QR"] = "1"
+        os.environ["PIPHOTOS_DISK_RESERVE_FRACTION"] = "0.0"
+
+        from fastapi.testclient import TestClient
+        from main import app, ip_limiter
+        ip_limiter._requests.clear()
+        self._tc = TestClient(app, raise_server_exceptions=False)
+        self.client = self._tc.__enter__()
+        from main import pairing  # created during app startup
+        resp = self.client.post("/api/v1/pair", json={
+            "code": pairing.generate_code(), "device_name": "Phone", "device_model": "Pixel",
+        })
+        assert resp.status_code == 200, resp.text
+        self.headers = {"Authorization": f"Bearer {resp.json()['token']}"}
+        self.device = resp.json()["device_id"]
+
+    def teardown_method(self):
+        os.environ["PIPHOTOS_DISK_RESERVE_FRACTION"] = "0.0"
+        self._tc.__exit__(None, None, None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _put(self, content: bytes, folder: str, name: str = "a.jpg"):
+        sha = hashlib.sha256(content).hexdigest()
+        return self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": self.device, "folder": folder, "name": name},
+            headers={**self.headers, "Content-Length": str(len(content))},
+            content=content,
+        )
+
+    @pytest.mark.parametrize("folder", [".", "", " ", "...", ".."])
+    def test_invalid_folder_on_upload_is_400(self, folder):
+        r = self._put(b"x" * 100, folder)
+        assert r.status_code == 400, (folder, r.status_code, r.text)
+        assert r.json()["detail"]["error"] == "bad_request"
+
+    @pytest.mark.parametrize("folder", [".", "", "..", "a/b"])
+    def test_invalid_folder_on_listing_never_500(self, folder):
+        r = self.client.get(
+            "/api/v1/files",
+            headers=self.headers,
+            params={"device_id": self.device, "folder": folder},
+        )
+        # Listing filters database rows, so an unknown folder is an empty list, never a crash.
+        assert r.status_code in (200, 400, 404), (folder, r.status_code, r.text)
+        if r.status_code == 200:
+            assert r.json() == []
+
+    def test_valid_upload_still_works(self):
+        assert self._put(b"hello photo", "Camera").status_code == 200
+
+    def test_disk_reserve_breach_uses_disk_full_code(self):
+        # Reserve 100% of the disk so any upload would breach it.
+        os.environ["PIPHOTOS_DISK_RESERVE_FRACTION"] = "1.0"
+        r = self._put(b"y" * 2048, "Camera", "big.jpg")
+        assert r.status_code == 507, r.text
+        detail = r.json()["detail"]
+        assert detail["error"] == "disk_full"
+        assert "quota" not in str(detail).lower()
+
+    def test_user_quota_breach_still_uses_quota_exceeded(self):
+        r = self.client.post("/api/v1/admin/users", headers=self.headers,
+                             json={"display_name": "Tiny", "quota_bytes": 10})
+        assert r.status_code == 200, r.text
+        inv = r.json()["invite_code"]
+        p = self.client.post("/api/v1/pair", json={"code": inv, "device_name": "T", "device_model": "m"})
+        assert p.status_code == 200, p.text
+        content = b"z" * 5000
+        sha = hashlib.sha256(content).hexdigest()
+        up = self.client.put(
+            f"/api/v1/upload/{sha}",
+            params={"device": p.json()["device_id"], "folder": "Camera", "name": "z.jpg"},
+            headers={"Authorization": f"Bearer {p.json()['token']}", "Content-Length": str(len(content))},
+            content=content,
+        )
+        assert up.status_code == 507, up.text
+        assert up.json()["detail"]["error"] == "quota_exceeded"

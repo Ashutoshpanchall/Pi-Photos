@@ -37,20 +37,24 @@ def slugify(name: str) -> str:
     return name[:_MAX_COMPONENT_LENGTH]
 
 
+class InvalidPathError(ValueError):
+    """A client-supplied folder or file name is not acceptable (maps to HTTP 400)."""
+
+
 def sanitise_component(component: str) -> str:
     """Sanitise a single path component.
 
     Rejects '..' and empty strings. Strips illegal characters and caps length.
     """
     if not component or component in (".", ".."):
-        raise ValueError(f"Invalid path component: {component!r}")
+        raise InvalidPathError(f"Invalid path component: {component!r}")
 
     component = unicodedata.normalize("NFC", component)
     component = _ILLEGAL_CHARS.sub("_", component)
     component = component.strip(". ")
 
     if not component:
-        raise ValueError("Path component is empty after sanitisation")
+        raise InvalidPathError("Path component is empty after sanitisation")
 
     return component[:_MAX_COMPONENT_LENGTH]
 
@@ -58,11 +62,11 @@ def sanitise_component(component: str) -> str:
 def sanitise_filename(filename: str) -> str:
     """Sanitise a filename, preserving the extension."""
     if not filename:
-        raise ValueError("Filename cannot be empty")
+        raise InvalidPathError("Filename cannot be empty")
 
     # Reject path separators in filenames
     if "/" in filename or "\\" in filename:
-        raise ValueError(f"Filename contains path separator: {filename!r}")
+        raise InvalidPathError(f"Filename contains path separator: {filename!r}")
 
     name = unicodedata.normalize("NFC", filename)
     name = _ILLEGAL_CHARS.sub("_", name)
@@ -119,7 +123,7 @@ class StorageManager:
         u_dir = self.user_dir(user_slug).resolve()
         resolved_base = base.resolve()
         if not resolved_base.is_relative_to(u_dir):
-            raise ValueError(f"Path traversal detected: {folder!r}")
+            raise InvalidPathError(f"Path traversal detected: {folder!r}")
 
         return base
 

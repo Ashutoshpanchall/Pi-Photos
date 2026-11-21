@@ -257,7 +257,7 @@ class ProfileFragment : Fragment() {
                         } else {
                             AlertDialog.Builder(requireContext())
                                 .setTitle("Remove $userName?")
-                                .setMessage("Revoke access and purge ${user.usedGB} GB of encrypted media?")
+                                .setMessage("Revoke access and purge ${user.usedGB} GB of media?")
                                 .setPositiveButton("Remove") { _, _ ->
                                     val removed = NodeRepository.removeUser(userId)
                                     if (removed) {

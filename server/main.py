@@ -67,7 +67,7 @@ from models import (
     UserOverview,
     AdminOverviewResponse,
 )
-from storage import StorageManager, slugify
+from storage import InvalidPathError, StorageManager, slugify
 from tls_cert import generate_self_signed_cert, get_cert_fingerprint, get_local_ipv4_addresses
 
 logger = logging.getLogger("piphotos")
@@ -355,6 +355,14 @@ app = FastAPI(
     version=SERVER_VERSION,
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(InvalidPathError)
+async def _invalid_path_handler(request: Request, exc: InvalidPathError):
+    """A bad folder/file name from the client is a 400, never a 500."""
+    return JSONResponse(status_code=400, content={"detail": {
+        "error": "bad_request", "message": "Invalid folder or file name",
+    }})
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +743,7 @@ async def upload_file(
             reserved = int(disk_usage.total * get_disk_reserve_fraction())
             if content_length > 0 and disk_usage.free - content_length < reserved:
                 raise HTTPException(status_code=507, detail={
-                    "error": "quota_exceeded",
+                    "error": "disk_full",
                     "message": "Upload would breach the disk reserve",
                 })
 
@@ -794,7 +802,7 @@ async def upload_file(
                     bytes_written_this_request += chunk_len
                     if (disk_usage.free - bytes_written_this_request) < reserved:
                         raise HTTPException(status_code=507, detail={
-                            "error": "quota_exceeded",
+                            "error": "disk_full",
                             "message": "Upload breached disk reserve",
                         })
 

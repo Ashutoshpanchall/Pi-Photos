@@ -5,22 +5,26 @@
 - **Memory first.** The index keeps only the fields needed for the grid. Heavy metadata is loaded when an item is opened.
 - **Deletion semantics.** Moving to Bin removes an item from the device. When backup exists, it is also removed from the backup. Each step asks for consent through Android's system dialogs.
 
-## Roadmap
+## Status
 
-| Phase | Goal | State |
-|---|---|---|
-| G0 | Stabilise the prototype and remove mock data | Done |
-| G1 | Gallery-first architecture, seams for media source and delete handler | Done |
-| G2 | Welcome screen, permissions, MediaStore index | Done |
-| G3 | Real timeline grid (day, month, year) | Next |
-| G4 | Viewer and video player on real media | Planned |
-| G5 | System-based trash, delete and restore | Planned |
-| G6 | Favourites sync, search | Planned |
-| N1+ | Raspberry Pi backend, encrypted sync, family accounts | Planned |
+| Area | State |
+|---|---|
+| Gallery: timeline grid, full-screen viewer, video, favourites | Implemented |
+| Backup to your own Raspberry Pi (pairing, resumable uploads, per-device folders) | Implemented, waiting for on-device verification |
+| Several users on one node (owner and members, quotas, invites) | Implemented, waiting for on-device verification |
+| Performance pass (tooling, startup, grid) | Tooling added; measured results pending (see `docs/PERF.md`) |
+| Encryption at rest (client-side or on the node) | Not implemented |
 
 ## Privacy
 
-PiPhotos does not send your photos anywhere in the local-only build. When the backup feature is added, photos will be encrypted on the device before upload, and the server will not be able to read them.
+Without a storage node, PiPhotos does not send your photos anywhere.
+
+If you set up backup to your own Raspberry Pi:
+
+- Photos travel over TLS. The app pins the node's certificate fingerprint when you pair.
+- Photos are **stored unencrypted** on the node's disk, under `users/<user>/devices/<device>/<folder>/`. The node can read them: it hashes them for duplicate detection, lists them and serves them back.
+- Anyone with access to the node (its owner, or someone who takes its SD card or disk) can read the files. Use full-disk encryption on the node if that matters to you.
+- Encryption at rest is not implemented.
 
 ## Contributing
 

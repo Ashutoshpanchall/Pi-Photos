@@ -46,7 +46,7 @@
     
     <!-- Backup -->
     <string name="backup_title">Backup</string>
-    <string name="backup_subtitle">Private Encrypted Backup</string>
+    <string name="backup_subtitle">Private Backup to Your Own Device</string>
     <string name="backup_progress_title">Uploading 38 of 142 items</string>
     <string name="backup_progress_subtitle">High Efficiency Media (HEIC/MOV)</string>
     <string name="backup_speed">1.4 MB/s</string>
@@ -67,7 +67,7 @@
     <string name="error_file">--</string>
     <string name="error_reason">Network timeout · Read error</string>
     <string name="action_retry">Retry</string>
-    <string name="backup_footer_title">Encrypted Local Storage</string>
+    <string name="backup_footer_title">Stored on Your Own Device</string>
     <string name="backup_footer_subtitle">Photos remain private on this device</string>
     
     <!-- Profile / You -->

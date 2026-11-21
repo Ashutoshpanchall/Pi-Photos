@@ -54,19 +54,29 @@ powershell -File scripts/perf/startup_trace.ps1
 # → open the downloaded .perfetto-trace file at https://ui.perfetto.dev
 ```
 
-Macrobenchmark (requires a connected device and release/benchmark build variant):
-```bash
-./gradlew :macrobenchmark:connectedBenchmarkAndroidTest   # [NEEDS-DEVICE-CHECK]
-```
+Macrobenchmark and baseline-profile *generation*: **not implemented yet.** There is no `:macrobenchmark`
+or `:baselineprofile` module in `settings.gradle.kts`, so there is no Gradle command for them.
+`app/src/main/baseline-prof.txt` is a short hand-written list of hot classes, not a generated profile.
+Until those modules exist, measure with the scripts above on a release build.
 
 ---
 
 ## After Each Phase
 
+Only the P1 baseline was measured. The later phases changed code but **no after-numbers have been
+measured yet**; do not read them as improvements until a row below has real values.
+
 | Phase | Cold start | Jank | APK | Heap | Notes |
 |-------|-----------|------|-----|------|-------|
-| P1 baseline | 1 078 ms | — | 4.54 MB | — | debug; JankStats, Trace markers added |
-| P2 | TBD | TBD | TBD | TBD | binary-search header, O(1) payloads, offscreenPageLimit=1 |
-| P3 | TBD | TBD | TBD | TBD | deferred init, baseline profile |
-| P4 | TBD | TBD | TBD | TBD | ABI filter arm64, R8 full mode |
-| P5 | TBD | TBD | TBD | TBD | OkHttp pool, WAL, streaming bench |
+| P1 baseline | 1 078 ms | not measured | 4.54 MB | not measured | debug build; JankStats, trace markers added |
+| P2 | not measured | not measured | not measured | not measured | header index lookups, prefetch throttling during flings |
+| P3 | not measured | not measured | not measured | not measured | lazy tab fragments, hand-written baseline-prof.txt |
+| P4 | not measured | not measured | 4.55 MB (reported) | not measured | arm64-v8a ABI filter, R8 full mode |
+| P5 | not measured | not measured | not measured | not measured | OkHttp client reuse, WAL synchronous=NORMAL, bench scripts |
+
+## Known weaknesses of the baseline
+
+- It was taken on a **debug** build; the targets are for release.
+- The cold-start median excluded the fastest run (690 ms) as "warm". Run `adb shell am force-stop` before
+  every run instead of dropping values, and report all values.
+- Jank, first thumbnail, viewer open and heap have no baseline at all yet.
