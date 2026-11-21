@@ -1,30 +1,29 @@
 # Run the PiPhotos storage node server on Windows.
-# Usage: .\run.ps1 [-Port 8443] [-Name "Home Vault"] [-Storage ./data/storage]
+# Usage: .\run.ps1 [-Port 8443] [-Name "Home Vault"] [-DataDir path]
 
 param(
-    [int]$Port = 8443,
-    [string]$Name = "Home Vault",
-    [string]$Storage = "./data/storage"
+    [int]$Port,
+    [string]$Name,
+    [string]$Storage,
+    [string]$DataDir
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-$env:PIPHOTOS_PORT = $Port
-$env:PIPHOTOS_NAME = $Name
-$env:PIPHOTOS_STORAGE = $Storage
-$env:PIPHOTOS_DB = "./data/piphotos.db"
-$env:PIPHOTOS_CERTS = "./data/certs"
-
-# Create virtualenv if needed
 if (-not (Test-Path ".venv")) {
     Write-Host "Creating virtual environment..."
     python -m venv .venv
+    & .venv\Scripts\Activate.ps1
+    pip install -q -r requirements.txt
+} else {
+    & .venv\Scripts\Activate.ps1
 }
 
-# Activate and install
-& .venv\Scripts\Activate.ps1
-pip install -q -r requirements.txt
+$cliArgs = @("run")
+if ($Port) { $cliArgs += @("--port", $Port) }
+if ($Name) { $cliArgs += @("--name", $Name) }
+if ($Storage) { $env:PIPHOTOS_STORAGE = $Storage }
+if ($DataDir) { $cliArgs += @("--data-dir", $DataDir) }
 
-Write-Host "Starting PiPhotos server on port $Port..."
-python main.py
+& python -m piphotos_server.cli @cliArgs

@@ -70,6 +70,12 @@ from models import (
 from storage import InvalidPathError, StorageManager, slugify
 from tls_cert import generate_self_signed_cert, get_cert_fingerprint, get_local_ipv4_addresses
 
+try:
+    from piphotos_server.paths import resolve_paths
+    from piphotos_server.local_admin import ensure_local_admin_token
+except ImportError:
+    pass
+
 logger = logging.getLogger("piphotos")
 
 # ---------------------------------------------------------------------------
@@ -93,13 +99,30 @@ def _config() -> dict:
     if config_path.exists():
         with open(config_path) as f:
             cfg = json.load(f)
+    elif "resolve_paths" in globals() and (os.environ.get("PIPHOTOS_DATA_DIR") or not Path("config.json").exists()):
+        try:
+            paths = resolve_paths()
+            if paths.config_path.exists():
+                with open(paths.config_path) as f:
+                    cfg = json.load(f)
+        except Exception:
+            pass
+
+    default_storage = "./data/storage"
+    default_db = "./data/piphotos.db"
+    default_certs = "./data/certs"
+    if "resolve_paths" in globals() and os.environ.get("PIPHOTOS_DATA_DIR"):
+        paths = resolve_paths()
+        default_storage = str(paths.storage_dir)
+        default_db = str(paths.db_path)
+        default_certs = str(paths.certs_dir)
 
     return {
         "server_name": os.environ.get("PIPHOTOS_NAME", cfg.get("name", "Home Vault")),
         "port": int(os.environ.get("PIPHOTOS_PORT", cfg.get("port", 8443))),
-        "storage_root": os.environ.get("PIPHOTOS_STORAGE", cfg.get("storage", "./data/storage")),
-        "db_path": os.environ.get("PIPHOTOS_DB", cfg.get("database", "./data/piphotos.db")),
-        "cert_dir": os.environ.get("PIPHOTOS_CERTS", cfg.get("certs", "./data/certs")),
+        "storage_root": os.environ.get("PIPHOTOS_STORAGE", cfg.get("storage", default_storage)),
+        "db_path": os.environ.get("PIPHOTOS_DB", cfg.get("database", default_db)),
+        "cert_dir": os.environ.get("PIPHOTOS_CERTS", cfg.get("certs", default_certs)),
         "default_quota": int(os.environ.get(
             "PIPHOTOS_DEFAULT_QUOTA", cfg.get("default_quota", str(DEFAULT_QUOTA_BYTES)))),
     }
@@ -153,7 +176,22 @@ def _load_or_create_server_id(data_dir: Path) -> str:
 # Auth dependency
 # ---------------------------------------------------------------------------
 
-def _require_auth(authorization: Optional[str]) -> AuthIdentity:
+def _require_auth(authorization: Optional[str], request: Optional[Request] = None) -> AuthIdentity:
+    # 1. Local admin loopback credential check
+    if request is not None and authorization and hasattr(app.state, "local_admin_token"):
+        client_host = request.client.host if request.client else ""
+        if client_host in ("127.0.0.1", "::1", "localhost", "testclient"):
+            raw_token = authorization.strip()
+            if raw_token.lower().startswith("bearer "):
+                raw_token = raw_token[7:].strip()
+            if secrets.compare_digest(raw_token, app.state.local_admin_token):
+                users = db.list_users()
+                owner = next((u for u in users if u.role == "owner" and u.status == "active"), None)
+                if owner is None:
+                    owner = next((u for u in users if u.role == "owner"), None)
+                if owner:
+                    return AuthIdentity(user_id=owner.id, device_id="local-admin")
+
     identity = resolve_bearer(db, authorization)
     if identity is None:
         raise HTTPException(status_code=401, detail={
@@ -161,7 +199,8 @@ def _require_auth(authorization: Optional[str]) -> AuthIdentity:
             "message": "Missing or invalid authentication token",
         })
     # Update device last_seen_at (throttled to at most once per 60s)
-    _throttled_update_device_last_seen(identity.device_id)
+    if identity.device_id:
+        _throttled_update_device_last_seen(identity.device_id)
 
     # Check user exists and active
     user = db.get_user(identity.user_id)
@@ -178,8 +217,8 @@ def _require_auth(authorization: Optional[str]) -> AuthIdentity:
     return identity
 
 
-def _require_owner(authorization: Optional[str]) -> AuthIdentity:
-    identity = _require_auth(authorization)
+def _require_owner(authorization: Optional[str], request: Optional[Request] = None) -> AuthIdentity:
+    identity = _require_auth(authorization, request=request)
     user = db.get_user(identity.user_id)
     if user is None or user.role != UserRole.OWNER:
         raise HTTPException(status_code=403, detail={
@@ -233,6 +272,15 @@ async def lifespan(app: FastAPI):
 
     # Server identity
     server_id = _load_or_create_server_id(data_dir)
+
+    # Local admin token for loopback CLI commands
+    if "resolve_paths" in globals() and "ensure_local_admin_token" in globals():
+        paths = resolve_paths()
+        token_path = paths.local_admin_token_path
+    else:
+        token_path = data_dir / "local-admin.token"
+    if "ensure_local_admin_token" in globals():
+        app.state.local_admin_token = ensure_local_admin_token(token_path)
 
     # TLS certificate
     cert_dir = Path(config["cert_dir"])
@@ -325,7 +373,7 @@ def _print_qr(port: int, fingerprint: str, code: str) -> None:
 
         print("\n  Scan this QR code with PiPhotos app:")
         matrix = qr.get_matrix()
-        for y in range(0, len(matrix) - 1, 2):
+        for y in range(0, len(matrix), 2):
             line = "  "
             for x in range(len(matrix[y])):
                 top = matrix[y][x]
@@ -1264,18 +1312,20 @@ async def delete_admin_device(
 
 @app.post("/api/v1/admin/pairing/open")
 async def open_admin_pairing(
+    request: Request,
     authorization: Optional[str] = Header(None),
 ) -> OpenPairingResponse:
-    _require_owner(authorization)
+    _require_owner(authorization, request=request)
     code = pairing.open_pairing(duration_minutes=10)
     return OpenPairingResponse(code=code, expires_in_seconds=600)
 
 
 @app.get("/api/v1/admin/overview")
 async def get_admin_overview(
+    request: Request,
     authorization: Optional[str] = Header(None),
 ) -> AdminOverviewResponse:
-    _require_owner(authorization)
+    _require_owner(authorization, request=request)
     disk_usage = shutil.disk_usage(storage.root)
     reserved = int(disk_usage.total * get_disk_reserve_fraction())
 

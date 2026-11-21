@@ -17,6 +17,9 @@ graphify-out/
 data/
 server/data/
 server/.venv/
+*.egg-info/
+build/
+dist/
 __pycache__/
 *.pyc
 
