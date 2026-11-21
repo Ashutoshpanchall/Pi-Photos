@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -74,9 +75,10 @@ class TestServerDoctorChecks:
 
     def test_hard_links_supported(self, doctor_paths):
         doctor = ServerDoctor(doctor_paths)
-        with patch("os.link", side_effect=lambda s, d: Path(d).touch()), \
-             patch.object(Path, "stat") as mock_stat:
-            mock_stat.return_value = MagicMock(st_ino=12345)
+        fake_stat = os.stat_result((stat.S_IFREG | 0o644, 12345, 1, 1, 1000, 1000, 100, 0, 0, 0))
+        with patch("os.link", return_value=None), \
+             patch("os.stat", return_value=fake_stat), \
+             patch.object(Path, "stat", return_value=fake_stat):
             doctor.check_hard_links()
             assert any(r.name == "hard_links" and r.status == "PASS" for r in doctor.results)
 

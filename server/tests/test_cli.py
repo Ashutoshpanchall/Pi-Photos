@@ -6,7 +6,7 @@ import json
 import os
 import stat
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -21,6 +21,10 @@ from piphotos_server.paths import (
     is_windows_elevated,
     is_root_user,
     ServerPaths,
+    get_pointer_file_path,
+    read_pointer_file,
+    write_pointer_file,
+    remove_pointer_file,
 )
 from piphotos_server.local_admin import (
     ensure_local_admin_token,
@@ -32,6 +36,7 @@ from piphotos_server.cli import (
     main as cli_main,
     cmd_version,
     cmd_setup,
+    cmd_run,
     cmd_info,
     cmd_status,
 )
@@ -45,14 +50,14 @@ class TestPathResolution:
              patch("piphotos_server.paths.is_windows_elevated", return_value=True), \
              patch.dict(os.environ, {"PROGRAMDATA": r"C:\ProgramData"}):
             data_dir = get_default_data_dir()
-            assert str(data_dir) == r"C:\ProgramData\PiPhotos"
+            assert PureWindowsPath(data_dir) == PureWindowsPath(r"C:\ProgramData\PiPhotos")
 
     def test_windows_non_elevated(self):
         with patch("sys.platform", "win32"), \
              patch("piphotos_server.paths.is_windows_elevated", return_value=False), \
              patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\test\AppData\Local"}):
             data_dir = get_default_data_dir()
-            assert str(data_dir) == r"C:\Users\test\AppData\Local\PiPhotos"
+            assert PureWindowsPath(data_dir) == PureWindowsPath(r"C:\Users\test\AppData\Local\PiPhotos")
 
     def test_macos_application_support(self):
         with patch("sys.platform", "darwin"), \
@@ -103,6 +108,94 @@ class TestPathResolution:
 
         paths = resolve_paths(data_dir=data_dir)
         assert paths.storage_dir == (tmp_path / "mounted_drive").resolve()
+
+    def test_pointer_file_read_write_remove(self, tmp_path):
+        fake_location = tmp_path / "piphotos" / "location"
+        with patch("piphotos_server.paths.get_pointer_file_path", return_value=fake_location):
+            # Initially absent
+            d, p = read_pointer_file()
+            assert d is None and p is None
+
+            # Write JSON pointer
+            target_data = tmp_path / "my_photos_data"
+            write_pointer_file(target_data, 18443)
+            assert fake_location.is_file()
+
+            d, p = read_pointer_file()
+            assert d == target_data.resolve()
+            assert p == 18443
+
+            # Remove pointer
+            remove_pointer_file()
+            assert not fake_location.exists()
+            assert read_pointer_file() == (None, None)
+
+    def test_resolve_paths_priority_flag_env_pointer_default(self, tmp_path):
+        fake_location = tmp_path / "piphotos" / "location"
+        pointer_data = tmp_path / "pointer_dir"
+        env_data = tmp_path / "env_dir"
+        flag_data = tmp_path / "flag_dir"
+        default_dir = tmp_path / "default_dir"
+
+        with patch("piphotos_server.paths.get_pointer_file_path", return_value=fake_location), \
+             patch("piphotos_server.paths.get_default_data_dir", return_value=default_dir):
+
+            # 4. Fallback to default when no flag, no env, no pointer file
+            with patch.dict(os.environ, {}, clear=True):
+                assert resolve_paths().data_dir == default_dir.resolve()
+
+            # 3. Pointer file takes precedence over default
+            write_pointer_file(pointer_data, 8443)
+            with patch.dict(os.environ, {}, clear=True):
+                assert resolve_paths().data_dir == pointer_data.resolve()
+
+            # 2. PIPHOTOS_DATA_DIR env takes precedence over pointer file
+            with patch.dict(os.environ, {"PIPHOTOS_DATA_DIR": str(env_data)}):
+                assert resolve_paths().data_dir == env_data.resolve()
+
+            # 1. --data-dir flag takes precedence over env and pointer file
+            with patch.dict(os.environ, {"PIPHOTOS_DATA_DIR": str(env_data)}):
+                assert resolve_paths(data_dir=flag_data).data_dir == flag_data.resolve()
+
+    def test_setup_persists_location_and_run_serves_without_flags(self, tmp_path):
+        """Reproduce: setup --data-dir X --port 18443 then run with no flags serves on 18443 using X."""
+        fake_location = tmp_path / "piphotos" / "location"
+        chosen_data_dir = tmp_path / "storage_vault"
+        parser = build_parser()
+
+        with patch("piphotos_server.paths.get_pointer_file_path", return_value=fake_location):
+            # 1. Run setup with explicit --data-dir and --port
+            setup_args = parser.parse_args([
+                "setup",
+                "--yes",
+                "--data-dir", str(chosen_data_dir),
+                "--port", "18443",
+                "--name", "Custom Vault",
+            ])
+            rc = cmd_setup(setup_args)
+            assert rc == 0
+
+            # Pointer file must have persisted data dir and port
+            assert fake_location.is_file()
+            persisted_dir, persisted_port = read_pointer_file()
+            assert persisted_dir == chosen_data_dir.resolve()
+            assert persisted_port == 18443
+
+            # 2. Now run 'piphotos-server run' with NO flags in a clean environment
+            run_args = parser.parse_args(["run"])
+            clean_env = {k: v for k, v in os.environ.items() if not k.startswith("PIPHOTOS_")}
+
+            with patch.dict(os.environ, clean_env, clear=True), \
+                 patch("main.main") as mock_server_main:
+                rc_run = cmd_run(run_args)
+                assert rc_run == 0
+                mock_server_main.assert_called_once()
+
+                # Verify environment configured from persisted config & pointer
+                assert os.environ["PIPHOTOS_PORT"] == "18443"
+                assert os.environ["PIPHOTOS_NAME"] == "Custom Vault"
+                assert os.environ["PIPHOTOS_DATA_DIR"] == str(chosen_data_dir.resolve())
+                assert Path(os.environ["PIPHOTOS_CONFIG"]).is_file()
 
 
 class TestLocalAdminToken:

@@ -131,15 +131,23 @@ class TestCliUpdateAndUninstall:
             assert "Refusing to purge filesystem root" in capsys.readouterr().out
 
 
+PWSH_BIN = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
+
+BASH_BIN = shutil.which("bash") or shutil.which("sh")
+if not BASH_BIN and Path(r"C:\Program Files\Git\bin\bash.exe").is_file():
+    BASH_BIN = r"C:\Program Files\Git\bin\bash.exe"
+
+
 class TestInstallerScripts:
     """Dry-run verification of install.sh and install.ps1."""
 
+    @pytest.mark.skipif(PWSH_BIN is None, reason="PowerShell is not installed on this system")
     def test_install_ps1_dry_run(self):
         script_path = Path(__file__).parent.parent.parent / "install" / "install.ps1"
         assert script_path.is_file(), f"install.ps1 not found at {script_path}"
 
         res = subprocess.run(
-            ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", str(script_path), "-DryRun", "-Ref", "test-ref"],
+            [PWSH_BIN, "-ExecutionPolicy", "Bypass", "-File", str(script_path), "-DryRun", "-Ref", "test-ref"],
             capture_output=True,
             text=True,
         )
@@ -148,10 +156,11 @@ class TestInstallerScripts:
         assert "Target Ref:    test-ref" in res.stdout
         assert "[DRY-RUN]" in res.stdout
 
+    @pytest.mark.skipif(PWSH_BIN is None, reason="PowerShell is not installed on this system")
     def test_install_ps1_posix_args(self):
         script_path = Path(__file__).parent.parent.parent / "install" / "install.ps1"
         res = subprocess.run(
-            ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", str(script_path), "--dry-run", "--ref", "posix-ref", "--port", "9443"],
+            [PWSH_BIN, "-ExecutionPolicy", "Bypass", "-File", str(script_path), "--dry-run", "--ref", "posix-ref", "--port", "9443"],
             capture_output=True,
             text=True,
         )
@@ -164,12 +173,11 @@ class TestInstallerScripts:
         script_path = Path(__file__).parent.parent.parent / "install" / "install.sh"
         assert script_path.is_file(), f"install.sh not found at {script_path}"
 
-        git_bash = r"C:\Program Files\Git\bin\bash.exe"
-        if not Path(git_bash).is_file():
-            pytest.skip("Git Bash not available on this host")
+        if not BASH_BIN:
+            pytest.skip("Bash shell not available on this host")
 
         res = subprocess.run(
-            [git_bash, "-c", f'TARGET_OS=Linux TARGET_ARCH=x86_64 sh "{script_path.as_posix()}" --dry-run --ref test-ref'],
+            [BASH_BIN, "-c", f'TARGET_OS=Linux TARGET_ARCH=x86_64 sh "{script_path.as_posix()}" --dry-run --ref test-ref'],
             capture_output=True,
             text=True,
         )
@@ -180,12 +188,11 @@ class TestInstallerScripts:
 
     def test_install_sh_dry_run_macos(self):
         script_path = Path(__file__).parent.parent.parent / "install" / "install.sh"
-        git_bash = r"C:\Program Files\Git\bin\bash.exe"
-        if not Path(git_bash).is_file():
-            pytest.skip("Git Bash not available on this host")
+        if not BASH_BIN:
+            pytest.skip("Bash shell not available on this host")
 
         res = subprocess.run(
-            [git_bash, "-c", f'TARGET_OS=Darwin TARGET_ARCH=arm64 sh "{script_path.as_posix()}" --dry-run --ref test-ref'],
+            [BASH_BIN, "-c", f'TARGET_OS=Darwin TARGET_ARCH=arm64 sh "{script_path.as_posix()}" --dry-run --ref test-ref'],
             capture_output=True,
             text=True,
         )
