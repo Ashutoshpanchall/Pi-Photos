@@ -144,8 +144,19 @@ if (-not $uvPath) {
         $installScript = Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1"
         Invoke-Expression $installScript
     } catch {
-        Write-Error "Failed to download and run uv installer: $_"
-        return
+        Write-Host "Notice: Astral uv install script failed. Attempting standalone binary download..." -ForegroundColor Yellow
+        $binDir = Join-Path $env:LOCALAPPDATA "PiPhotos\bin"
+        New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+        $binPath = Join-Path $binDir "piphotos-server.exe"
+        try {
+            Invoke-WebRequest -Uri "https://github.com/Ashutoshpanchall/Pi-Photos/releases/latest/download/piphotos-server-windows-x64.exe" -OutFile $binPath
+            $env:PATH = "$binDir;$env:PATH"
+            $standaloneBinary = $true
+            Write-Host "Downloaded standalone binary to: $binPath" -ForegroundColor Green
+        } catch {
+            Write-Error "Failed to install uv and pre-built standalone binary unavailable: $_"
+            return
+        }
     }
 
     $env:PATH = "$env:LOCALAPPDATA\uv\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
@@ -162,26 +173,28 @@ if (-not $uvPath) {
     }
 }
 
-Write-Host "Using uv at: $uvPath" -ForegroundColor Green
+if (-not $standaloneBinary) {
+    Write-Host "Using uv at: $uvPath" -ForegroundColor Green
 
-# ---------------------------------------------------------------------------
-# 4. Install / Upgrade piphotos-server
-# ---------------------------------------------------------------------------
-if ((Test-Path $Ref) -or ($Ref -eq "local") -or ($Ref -eq ".")) {
-    if ($Ref -eq "local" -or $Ref -eq ".") {
-        $packageSpec = ".\server"
+    # ---------------------------------------------------------------------------
+    # 4. Install / Upgrade piphotos-server
+    # ---------------------------------------------------------------------------
+    if ((Test-Path $Ref) -or ($Ref -eq "local") -or ($Ref -eq ".")) {
+        if ($Ref -eq "local" -or $Ref -eq ".") {
+            $packageSpec = ".\server"
+        } else {
+            $packageSpec = $Ref
+        }
     } else {
-        $packageSpec = $Ref
+        $packageSpec = "git+https://github.com/Ashutoshpanchall/Pi-Photos@${Ref}#subdirectory=server"
     }
-} else {
-    $packageSpec = "git+https://github.com/Ashutoshpanchall/Pi-Photos@${Ref}#subdirectory=server"
-}
-Write-Host "`nInstalling/upgrading piphotos-server from $packageSpec..." -ForegroundColor Cyan
+    Write-Host "`nInstalling/upgrading piphotos-server from $packageSpec..." -ForegroundColor Cyan
 
-& $uvPath tool install --force "$packageSpec"
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to install piphotos-server via uv."
-    return
+    & $uvPath tool install --force "$packageSpec"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to install piphotos-server via uv."
+        return
+    }
 }
 
 # Add user tool bin paths to PATH

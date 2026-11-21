@@ -219,26 +219,45 @@ if [ -z "$UV_BIN" ]; then
   elif [ -x "$HOME/.cargo/bin/uv" ]; then
     UV_BIN="$HOME/.cargo/bin/uv"
   else
-    echo "Error: uv was installed but could not be located in ~/.local/bin or ~/.cargo/bin." >&2
-    exit 1
+    echo "Warning: uv was not found in standard paths. Attempting pre-built binary fallback..."
+    BINARY_NAME="piphotos-server-linux-x86_64"
+    if [ "$PLATFORM" = "macOS" ]; then
+      BINARY_NAME="piphotos-server-macos-universal2"
+    elif [ "$ARCH" = "aarch64" ]; then
+      BINARY_NAME="piphotos-server-linux-aarch64"
+    fi
+    BINARY_URL="https://github.com/Ashutoshpanchall/Pi-Photos/releases/latest/download/$BINARY_NAME"
+    mkdir -p "$HOME/.local/bin"
+    if curl -fsSL "$BINARY_URL" -o "$HOME/.local/bin/piphotos-server" 2>/dev/null; then
+      chmod +x "$HOME/.local/bin/piphotos-server"
+      echo "Downloaded standalone binary to $HOME/.local/bin/piphotos-server"
+      STANDALONE_BINARY=1
+    else
+      echo "Error: uv was installed but could not be located, and standalone binary fallback was unavailable." >&2
+      exit 1
+    fi
   fi
 fi
 
-echo "Using uv at: $UV_BIN"
+if [ "$STANDALONE_BINARY" != "1" ]; then
+  echo "Using uv at: $UV_BIN"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Install / Upgrade piphotos-server tool
 # ---------------------------------------------------------------------------
-if [ -d "$REF" ] || [ -f "$REF/pyproject.toml" ]; then
-  PACKAGE_SPEC="$REF"
-elif [ "$REF" = "local" ] || [ "$REF" = "." ]; then
-  PACKAGE_SPEC="./server"
-else
-  PACKAGE_SPEC="git+https://github.com/Ashutoshpanchall/Pi-Photos@${REF}#subdirectory=server"
+if [ "$STANDALONE_BINARY" != "1" ]; then
+  if [ -d "$REF" ] || [ -f "$REF/pyproject.toml" ]; then
+    PACKAGE_SPEC="$REF"
+  elif [ "$REF" = "local" ] || [ "$REF" = "." ]; then
+    PACKAGE_SPEC="./server"
+  else
+    PACKAGE_SPEC="git+https://github.com/Ashutoshpanchall/Pi-Photos@${REF}#subdirectory=server"
+  fi
+  echo ""
+  echo "Installing/upgrading piphotos-server from $PACKAGE_SPEC..."
+  "$UV_BIN" tool install --force "$PACKAGE_SPEC"
 fi
-echo ""
-echo "Installing/upgrading piphotos-server from $PACKAGE_SPEC..."
-"$UV_BIN" tool install --force "$PACKAGE_SPEC"
 
 # Ensure ~/.local/bin is in PATH for piphotos-server executable
 export PATH="$HOME/.local/bin:$PATH"
@@ -247,8 +266,11 @@ if ! command -v piphotos-server >/dev/null 2>&1; then
   # Look in uv tools directory
   if [ -x "$HOME/.local/bin/piphotos-server" ]; then
     SERVER_BIN="$HOME/.local/bin/piphotos-server"
-  else
+  elif [ -n "$UV_BIN" ]; then
     SERVER_BIN="$("$UV_BIN" tool dir)/piphotos-server/bin/piphotos-server"
+  else
+    echo "Error: piphotos-server executable not found." >&2
+    exit 1
   fi
 else
   SERVER_BIN="$(command -v piphotos-server)"

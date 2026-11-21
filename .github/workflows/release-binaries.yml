@@ -1,0 +1,69 @@
+name: Release Standalone Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-binaries:
+    name: Build Standalone Binary (${{ matrix.os }} - ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            artifact_name: piphotos-server-linux-x86_64
+          - os: macos-latest
+            arch: universal2
+            artifact_name: piphotos-server-macos-universal2
+          - os: windows-latest
+            arch: x64
+            artifact_name: piphotos-server-windows-x64.exe
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies & PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt
+          pip install pyinstaller -e server/
+
+      - name: Build Single Binary (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          pyinstaller --onefile \
+            --name "${{ matrix.artifact_name }}" \
+            --add-data "server/*.py:." \
+            server/piphotos_server/cli.py
+
+      - name: Build Single Binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --onefile `
+            --name "${{ matrix.artifact_name }}" `
+            --add-data "server/*.py;." `
+            server/piphotos_server/cli.py
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}
+
+      - name: Release Asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact_name }}
