@@ -174,6 +174,11 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+# Persist pointer file
+POINTER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/piphotos"
+mkdir -p "$POINTER_DIR" 2>/dev/null || true
+printf '{\n  "data_dir": "%s",\n  "port": %d\n}\n' "$TARGET_DATA_DIR" "$PORT" > "$POINTER_DIR/location" 2>/dev/null || true
+
 if [ "$YES" != "1" ] && [ -t 0 ]; then
   printf "Proceed with installation? [Y/n]: "
   read -r CONFIRM

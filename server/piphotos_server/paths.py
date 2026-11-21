@@ -27,6 +27,73 @@ def is_root_user() -> bool:
     return False
 
 
+def get_pointer_file_path() -> Path:
+    """Return platform-standard path to the PiPhotos pointer file.
+
+    - Windows: %LOCALAPPDATA%\\PiPhotos\\location
+    - Linux/macOS: ~/.config/piphotos/location (or $XDG_CONFIG_HOME/piphotos/location)
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "PiPhotos" / "location"
+    else:
+        xdg_config = os.environ.get("XDG_CONFIG_HOME")
+        if xdg_config:
+            base = xdg_config
+        else:
+            base = str(Path.home() / ".config")
+        return Path(base) / "piphotos" / "location"
+
+
+def read_pointer_file() -> tuple[Optional[Path], Optional[int]]:
+    """Read persisted data directory and port from pointer file, if present."""
+    try:
+        p = get_pointer_file_path()
+        if not p.is_file():
+            return None, None
+        content = p.read_text(encoding="utf-8").strip()
+        if not content:
+            return None, None
+        if content.startswith("{"):
+            import json
+            data = json.loads(content)
+            data_dir = Path(data["data_dir"]).expanduser().resolve() if "data_dir" in data and data["data_dir"] else None
+            port = int(data["port"]) if "port" in data and data["port"] is not None else None
+            return data_dir, port
+        else:
+            lines = content.splitlines()
+            data_dir = Path(lines[0].strip()).expanduser().resolve() if lines and lines[0].strip() else None
+            port = int(lines[1].strip()) if len(lines) > 1 and lines[1].strip().isdigit() else None
+            return data_dir, port
+    except Exception:
+        return None, None
+
+
+def write_pointer_file(data_dir: Path | str, port: Optional[int] = None) -> None:
+    """Persist chosen data directory and port in pointer file."""
+    try:
+        p = get_pointer_file_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        payload = {
+            "data_dir": str(Path(data_dir).expanduser().resolve()),
+            "port": port,
+        }
+        p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def remove_pointer_file() -> None:
+    """Remove pointer file (e.g. during purge uninstall)."""
+    try:
+        p = get_pointer_file_path()
+        if p.is_file():
+            p.unlink()
+    except Exception:
+        pass
+
+
 def get_default_data_dir() -> Path:
     """Return standard per-OS default data directory for PiPhotos.
 
@@ -41,6 +108,9 @@ def get_default_data_dir() -> Path:
             base = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
         else:
             base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        if sys.platform != "win32":
+            from pathlib import PureWindowsPath
+            return PureWindowsPath(base) / "PiPhotos"  # type: ignore
         return Path(base) / "PiPhotos"
     elif sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "PiPhotos"
@@ -82,7 +152,7 @@ def resolve_paths(
     config_path: Optional[Path | str] = None,
 ) -> ServerPaths:
     """Resolve full ServerPaths hierarchy with precedence:
-    CLI arguments > Environment variables > config.json / Default data dir.
+    CLI arguments (--data-dir) > Environment variables (PIPHOTOS_DATA_DIR) > Pointer file > Default data dir.
     """
     # 1. Resolve data_dir
     if data_dir is not None:
@@ -90,7 +160,11 @@ def resolve_paths(
     elif os.environ.get("PIPHOTOS_DATA_DIR"):
         resolved_data = Path(os.environ["PIPHOTOS_DATA_DIR"]).expanduser().resolve()
     else:
-        resolved_data = get_default_data_dir()
+        pointer_data, _ = read_pointer_file()
+        if pointer_data is not None:
+            resolved_data = pointer_data
+        else:
+            resolved_data = get_default_data_dir()
 
     # 2. Resolve config_path
     if config_path is not None:

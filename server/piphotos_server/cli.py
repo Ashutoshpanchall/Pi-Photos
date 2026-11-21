@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .paths import resolve_paths, ServerPaths
+from .paths import resolve_paths, ServerPaths, write_pointer_file, remove_pointer_file
 from .local_admin import ensure_local_admin_token, read_local_admin_token
 from tls_cert import generate_self_signed_cert, get_cert_fingerprint, get_local_ipv4_addresses
 
@@ -119,6 +119,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         import uuid
         paths.server_id_path.write_text(str(uuid.uuid4()), encoding="utf-8")
 
+    # 6. Persist chosen data directory and port in pointer file
+    write_pointer_file(paths.data_dir, port)
+
     # Print setup summary
     ips = get_local_ipv4_addresses()
     print("=" * 60)
@@ -165,18 +168,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     paths.ensure_dirs()
     _setup_logging(paths)
 
+    # Read config.json to pick up port and name if not overridden by CLI flags
+    cfg = {}
+    if paths.config_path.is_file():
+        try:
+            with open(paths.config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+
+    port = getattr(args, "port", None) or os.environ.get("PIPHOTOS_PORT") or cfg.get("port") or 8443
+    name = getattr(args, "name", None) or os.environ.get("PIPHOTOS_NAME") or cfg.get("name") or "Home Vault"
+
     # Pass paths via environment so lifespan and endpoints pick them up seamlessly
+    os.environ["PIPHOTOS_PORT"] = str(port)
+    os.environ["PIPHOTOS_NAME"] = str(name)
     os.environ["PIPHOTOS_DATA_DIR"] = str(paths.data_dir)
     os.environ["PIPHOTOS_CONFIG"] = str(paths.config_path)
     os.environ["PIPHOTOS_STORAGE"] = str(paths.storage_dir)
     os.environ["PIPHOTOS_DB"] = str(paths.db_path)
     os.environ["PIPHOTOS_CERTS"] = str(paths.certs_dir)
-    if getattr(args, "port", None):
-        os.environ["PIPHOTOS_PORT"] = str(args.port)
     if getattr(args, "host", None):
         os.environ["PIPHOTOS_HOST"] = str(args.host)
-    if getattr(args, "name", None):
-        os.environ["PIPHOTOS_NAME"] = str(args.name)
 
     from main import main as server_main
     server_main()
@@ -461,6 +474,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             confirm = input(f"\nType the folder name '{folder_name}' to permanently delete data: ").strip()
             if confirm == folder_name:
                 shutil.rmtree(paths.data_dir)
+                remove_pointer_file()
                 print(f"Permanently purged data directory: {paths.data_dir}")
                 try:
                     paths.storage_dir.relative_to(paths.data_dir)

@@ -22,6 +22,8 @@
     .\install.ps1
 #>
 
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSAvoidUsingInvokeExpression", "", Justification = "Official Astral uv bootstrap installation script")]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSAvoidUsingWriteHost", "", Justification = "Installer CLI uses Write-Host for colored terminal output")]
 [CmdletBinding()]
 param(
     [Alias("dry-run")]
@@ -61,6 +63,19 @@ if (-not $DataDir) {
     }
 } else {
     $effectiveDataDir = $DataDir
+}
+
+if (-not $DryRun) {
+    try {
+        $pointerDir = Join-Path $env:LOCALAPPDATA "PiPhotos"
+        if (-not (Test-Path $pointerDir)) {
+            New-Item -ItemType Directory -Force -Path $pointerDir | Out-Null
+        }
+        $pointerJson = @{ data_dir = $effectiveDataDir; port = $Port } | ConvertTo-Json
+        Set-Content -Path (Join-Path $pointerDir "location") -Value $pointerJson -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {
+        # Non-critical if user profile path is restricted
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -126,6 +141,7 @@ if (-not $Yes -and [Environment]::UserInteractive) {
 # 3. Locate or install Astral uv
 # ---------------------------------------------------------------------------
 $uvPath = $null
+$standaloneBinary = $false
 $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
 if ($uvCmd) {
     $uvPath = $uvCmd.Source
@@ -248,7 +264,7 @@ if (-not $NoService) {
                 }
                 $resp.Close()
             } catch {
-                # Retry
+                Start-Sleep -Milliseconds 100
             }
         }
     } finally {
