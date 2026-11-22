@@ -184,8 +184,14 @@ def resolve_paths(
             with open(resolved_config, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
                 cfg_storage = cfg.get("storage")
+                if isinstance(cfg_storage, dict):
+                    cfg_storage = cfg_storage.get("path")
                 cfg_db = cfg.get("database")
+                if isinstance(cfg_db, dict):
+                    cfg_db = cfg_db.get("path")
                 cfg_certs = cfg.get("certs")
+                if isinstance(cfg_certs, dict):
+                    cfg_certs = cfg_certs.get("path")
         except Exception:
             pass
 

@@ -230,3 +230,21 @@ class AllocationResponse(BaseModel):
     drive_free_bytes: int
     drive_total_bytes: int
     warning: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Improvement 9: Hash list endpoint models
+# ---------------------------------------------------------------------------
+
+class FileHashItem(BaseModel):
+    id: int
+    sha256: str
+    size: int
+    date_taken: Optional[int] = None
+
+
+class FileHashesResponse(BaseModel):
+    items: list[FileHashItem]
+    next_cursor: Optional[int] = None
+    has_more: bool = False
+

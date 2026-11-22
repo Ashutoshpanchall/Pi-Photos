@@ -69,6 +69,8 @@ from models import (
     OpenPairingResponse,
     UserOverview,
     AdminOverviewResponse,
+    FileHashItem,
+    FileHashesResponse,
 )
 from storage import InvalidPathError, StorageManager, slugify
 from tls_cert import generate_self_signed_cert, get_cert_fingerprint, get_local_ipv4_addresses
@@ -1087,6 +1089,23 @@ async def get_me(authorization: Optional[str] = Header(None)) -> MeResponse:
     )
 
 
+@app.get("/api/v1/files/hashes", response_model=FileHashesResponse)
+async def get_file_hashes(
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(1000, ge=1, le=5000),
+    authorization: Optional[str] = Header(None),
+) -> FileHashesResponse:
+    identity = _require_auth(authorization)
+    items, next_cursor, has_more = db.get_file_hashes_paginated(
+        user_id=identity.user_id, cursor=cursor, limit=limit
+    )
+    return FileHashesResponse(
+        items=[FileHashItem(**item) for item in items],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
 @app.get("/api/v1/files")
 async def list_files(
     device_id: Optional[str] = Query(None),
@@ -1134,7 +1153,11 @@ async def get_file_content(
     file_path = folder_dir / file_row.relative_path
 
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "File content not found on disk"})
+        fallback_path = storage.device_dir(user.slug, dev.slug if dev else "unknown") / file_row.folder / file_row.relative_path
+        if fallback_path.exists():
+            file_path = fallback_path
+        else:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "message": "File content not found on disk"})
 
     file_size = file_path.stat().st_size
     range_header = request.headers.get("Range")

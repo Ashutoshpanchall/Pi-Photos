@@ -572,6 +572,34 @@ def cmd_app(args: argparse.Namespace) -> int:
     return launch_gui(data_dir=args.data_dir, start_in_tray=getattr(args, "tray", False))
 
 
+def cmd_import(args: argparse.Namespace) -> int:
+    """Import media from a local folder."""
+    try:
+        from .control import ServerController
+        ctrl = ServerController(data_dir=args.data_dir)
+        res = ctrl.import_folder(args.folder, user_id=args.user)
+        mb = res["total_bytes"] / (1024 * 1024)
+        print(f"Import complete: {res['imported']} imported ({mb:.1f} MB), {res['skipped']} skipped.")
+        return 0
+    except Exception as e:
+        print(f"Error during import: {e}")
+        return 1
+
+
+def cmd_rescan(args: argparse.Namespace) -> int:
+    """Rescan on-disk storage directories to rebuild database index."""
+    try:
+        from .control import ServerController
+        ctrl = ServerController(data_dir=args.data_dir)
+        res = ctrl.rescan_storage()
+        print(f"Rescan complete: {res['indexed']} newly indexed, {res['existing']} existing, {res['errors']} errors.")
+        return 0
+    except Exception as e:
+        print(f"Error during rescan: {e}")
+        return 1
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build command-line parser with all subcommands."""
     parser = argparse.ArgumentParser(
@@ -674,6 +702,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_app.add_argument("--tray", action="store_true", help="Start minimized to system tray")
     p_app.add_argument("--data-dir", type=str, default=None, help="Data directory")
 
+    # import
+    p_import = subparsers.add_parser("import", help="Import photos and videos from a local folder")
+    p_import.add_argument("folder", help="Path to folder containing photos/videos")
+    p_import.add_argument("--user", type=str, default=None, help="Target user ID (defaults to owner)")
+    p_import.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
+    # rescan
+    p_rescan = subparsers.add_parser("rescan", help="Rebuild file index from on-disk storage folders")
+    p_rescan.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
     # version
     subparsers.add_parser("version", help="Show server software version")
 
@@ -709,6 +747,8 @@ def main(args: Optional[list[str]] = None) -> int:
         "backup": cmd_backup,
         "restore": cmd_restore,
         "app": cmd_app,
+        "import": cmd_import,
+        "rescan": cmd_rescan,
     }
 
     handler = handlers.get(parsed.subcommand)

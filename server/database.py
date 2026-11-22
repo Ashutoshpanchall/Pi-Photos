@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE INDEX IF NOT EXISTS idx_files_user_sha ON files(user_id, sha256);
 CREATE INDEX IF NOT EXISTS idx_files_user_device_folder
     ON files(user_id, device_id, folder);
+CREATE INDEX IF NOT EXISTS idx_files_user_id ON files(user_id, id);
 
 CREATE TABLE IF NOT EXISTS tokens (
     token_hash TEXT PRIMARY KEY,
@@ -736,6 +737,40 @@ class Database:
             fid = cur.lastrowid
         return FileRow(fid, user_id, device_id, folder, relative_path,
                         sha256, size, date_taken, now)
+
+    record_file = insert_file
+
+    def list_files(self, user_id: str) -> list[FileRow]:
+        return self.list_files_filtered(user_id, limit=5000)
+
+    def get_file_hashes_paginated(
+        self,
+        user_id: str,
+        cursor: int = 0,
+        limit: int = 1000,
+    ) -> tuple[list[dict], Optional[int], bool]:
+        limit = min(max(1, limit), 5000)
+        with self._cursor() as cur:
+            cur.execute("""
+                SELECT id, sha256, size, date_taken
+                FROM files
+                WHERE user_id = ? AND id > ?
+                ORDER BY id ASC
+                LIMIT ?
+            """, (user_id, cursor, limit + 1))
+            rows = cur.fetchall()
+            has_more = len(rows) > limit
+            items = [
+                {
+                    "id": r["id"],
+                    "sha256": r["sha256"],
+                    "size": r["size"],
+                    "date_taken": r["date_taken"],
+                }
+                for r in rows[:limit]
+            ]
+            next_cursor = items[-1]["id"] if items and has_more else None
+            return items, next_cursor, has_more
 
     def total_storage_used(self) -> int:
         """Returns total physical bytes stored across all users (deduplicated by sha256)."""

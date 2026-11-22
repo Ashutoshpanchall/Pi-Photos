@@ -23,6 +23,7 @@ import shutil
 import socket
 import sys
 import time
+import hashlib
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
@@ -782,3 +783,224 @@ class ServerController:
 
     def uninstall_service(self, no_firewall: bool = False) -> Tuple[bool, str]:
         return svc_uninstall(self.paths, is_system=False, no_firewall=no_firewall)
+
+    # ---------------------------------------------------------------------------
+    # Disaster Recovery & Desktop Import (Improvements 10 & 11)
+    # ---------------------------------------------------------------------------
+
+    def _get_storage_root(self) -> Path:
+        """Resolve active storage root (checking storage_dir or data_dir/blobs)."""
+        if self.paths.storage_dir.is_dir():
+            return self.paths.storage_dir
+        blobs = self.paths.data_dir / "blobs"
+        if blobs.is_dir():
+            return blobs
+        return self.paths.storage_dir
+
+    def import_folder(self, folder_path: Path | str, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Import photos and videos from a local PC directory into PiPhotos library."""
+        src_path = Path(folder_path).expanduser().resolve()
+        if not src_path.is_dir():
+            raise ControlError(f"Directory not found: {src_path}", status_code=404)
+
+        storage_root = self._get_storage_root().resolve()
+        if src_path == storage_root or src_path.is_relative_to(storage_root):
+            raise ControlError("Cannot import from within the PiPhotos storage directory. Use 'rescan' instead.", status_code=400)
+
+        if not self.paths.db_path.is_file():
+            raise ControlError("Database not found", status_code=404)
+
+        try:
+            from database import Database
+            from storage import StorageManager, sanitise_filename
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from database import Database
+            from storage import StorageManager, sanitise_filename
+
+        db = Database(self.paths.db_path)
+        storage = StorageManager(storage_root)
+
+        if user_id:
+            user = db.get_user(user_id) or db.get_user_by_slug(user_id)
+            if not user:
+                raise ControlError(f"User not found: {user_id}", status_code=404)
+        else:
+            user = db.get_owner()
+            if not user:
+                users = db.list_users()
+                if not users:
+                    raise ControlError("No users exist in PiPhotos library", status_code=404)
+                user = users[0]
+
+        devices = db.list_devices(user.id)
+        dev = next((d for d in devices if d.name in ("Desktop Import", "PC") or d.slug in ("desktop-import", "pc")), None)
+        if not dev:
+            dev = db.create_device(user.id, "Desktop Import", "PC", "desktop-import")
+
+        media_extensions = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".mp4", ".mov", ".dng", ".gif", ".avi", ".mkv"}
+
+        imported = 0
+        skipped = 0
+        total_bytes = 0
+
+        for root_dir, _, files in os.walk(src_path):
+            for file_name in files:
+                file_file = Path(root_dir) / file_name
+                ext = file_file.suffix.lower()
+                if ext not in media_extensions:
+                    skipped += 1
+                    continue
+
+                try:
+                    h = hashlib.sha256()
+                    size = 0
+                    with open(file_file, "rb") as f:
+                        while chunk := f.read(65536):
+                            h.update(chunk)
+                            size += len(chunk)
+                    sha256 = h.hexdigest()
+
+                    if db.file_exists_for_user(user.id, sha256):
+                        skipped += 1
+                        continue
+
+                    mtime = int(file_file.stat().st_mtime)
+                    dest_folder_dir = storage.folder_dir(
+                        user.slug, dev.slug, "imports",
+                        date_taken=mtime,
+                        organise_by_date=user.organise_by_date,
+                    )
+                    dest_folder_dir.mkdir(parents=True, exist_ok=True)
+
+                    safe_name = sanitise_filename(file_name)
+                    dest_file = dest_folder_dir / safe_name
+                    if dest_file.exists():
+                        dest_file = dest_folder_dir / f"{dest_file.stem}_{sha256[:8]}{dest_file.suffix}"
+
+                    shutil.copy2(file_file, dest_file)
+
+                    db.insert_file(
+                        user_id=user.id,
+                        device_id=dev.id,
+                        folder="imports",
+                        relative_path=dest_file.name,
+                        sha256=sha256,
+                        size=size,
+                        date_taken=mtime,
+                    )
+                    imported += 1
+                    total_bytes += size
+                except Exception as e:
+                    logger.warning("Failed to import file %s: %s", file_file, e)
+                    skipped += 1
+
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "total_bytes": total_bytes,
+        }
+
+    def rescan_storage(self) -> Dict[str, int]:
+        """Rebuild missing media index records from on-disk user storage directory structure."""
+        if not self.paths.db_path.is_file():
+            raise ControlError("Database not found", status_code=404)
+
+        try:
+            from database import Database
+            from storage import slugify
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from database import Database
+            from storage import slugify
+
+        db = Database(self.paths.db_path)
+        storage_root = self._get_storage_root()
+        users_root = storage_root / "users"
+        if not users_root.is_dir():
+            return {"indexed": 0, "existing": 0, "errors": 0}
+
+        users = db.list_users()
+        user_by_slug = {slugify(u.slug): u for u in users}
+        user_by_slug.update({u.slug: u for u in users})
+        user_by_slug.update({u.id: u for u in users})
+
+        media_extensions = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".mp4", ".mov", ".dng", ".gif", ".avi", ".mkv"}
+
+        indexed = 0
+        existing = 0
+        errors = 0
+
+        for u_dir in users_root.iterdir():
+            if not u_dir.is_dir():
+                continue
+            user = user_by_slug.get(u_dir.name)
+            if not user:
+                continue
+
+            devices_dir = u_dir / "devices"
+            if not devices_dir.is_dir():
+                continue
+
+            devs = db.list_devices(user.id)
+            dev_by_slug = {slugify(d.slug): d for d in devs}
+            dev_by_slug.update({d.slug: d for d in devs})
+
+            for dev_dir in devices_dir.iterdir():
+                if not dev_dir.is_dir():
+                    continue
+                dev = dev_by_slug.get(dev_dir.name)
+                if not dev:
+                    dev = db.create_device(user.id, dev_dir.name, "Recovered Device", dev_dir.name)
+                    dev_by_slug[dev.slug] = dev
+                    dev_by_slug[slugify(dev.slug)] = dev
+
+                for folder_dir in dev_dir.iterdir():
+                    if not folder_dir.is_dir() or folder_dir.name.startswith("."):
+                        continue
+                    folder_name = folder_dir.name
+                    for file_path in folder_dir.rglob("*"):
+                        if not file_path.is_file():
+                            continue
+                        ext = file_path.suffix.lower()
+                        if ext not in media_extensions:
+                            continue
+                        try:
+                            h = hashlib.sha256()
+                            size = 0
+                            with open(file_path, "rb") as f:
+                                while chunk := f.read(65536):
+                                    h.update(chunk)
+                                    size += len(chunk)
+                            sha256 = h.hexdigest()
+
+                            if db.file_exists_for_user(user.id, sha256):
+                                existing += 1
+                                continue
+
+                            rel_parts = file_path.relative_to(folder_dir).parts
+                            if len(rel_parts) == 3 and rel_parts[0].isdigit() and len(rel_parts[0]) == 4 and rel_parts[1].isdigit() and len(rel_parts[1]) == 2 and user.organise_by_date:
+                                rel_path = rel_parts[2]
+                            else:
+                                rel_path = str(file_path.relative_to(folder_dir)).replace("\\", "/")
+
+                            mtime = int(file_path.stat().st_mtime)
+                            db.insert_file(
+                                user_id=user.id,
+                                device_id=dev.id,
+                                folder=folder_name,
+                                relative_path=rel_path,
+                                sha256=sha256,
+                                size=size,
+                                date_taken=mtime,
+                            )
+                            indexed += 1
+                        except Exception as e:
+                            logger.warning("Error rescanning %s: %s", file_path, e)
+                            errors += 1
+
+        return {
+            "indexed": indexed,
+            "existing": existing,
+            "errors": errors,
+        }
