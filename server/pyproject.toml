@@ -42,3 +42,7 @@ piphotos-server = "piphotos_server.cli:main"
 [tool.setuptools]
 packages = ["piphotos_server"]
 py-modules = ["main", "auth", "database", "storage", "tls_cert", "discovery", "models"]
+
+[tool.pytest.ini_options]
+addopts = "--basetemp=D:/temp/pytest"
+asyncio_default_fixture_loop_scope = "function"
