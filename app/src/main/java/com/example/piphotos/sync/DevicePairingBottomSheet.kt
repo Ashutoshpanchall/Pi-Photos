@@ -36,6 +36,12 @@ class DevicePairingBottomSheet(
     private var validator: NodePairingValidator? = null
     private var selectedTlsFingerprint: String? = null
 
+    var initialHost: String? = null
+    var initialPort: Int = 8443
+    var initialFingerprint: String? = null
+    var initialCode: String? = null
+    var initialAutoVerify: Boolean = false
+
     private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
         val contents = result.contents
         if (!contents.isNullOrBlank()) {
@@ -96,7 +102,23 @@ class DevicePairingBottomSheet(
             startLiveVerification()
         }
 
-        discovery?.startDiscovery()
+        val host = initialHost
+        if (!host.isNullOrEmpty()) {
+            showManualForm(
+                host = host,
+                port = initialPort,
+                tlsFingerprint = initialFingerprint
+            )
+            val code = initialCode
+            if (!code.isNullOrEmpty()) {
+                binding.etPairingCode.setText(code)
+                if (initialAutoVerify) {
+                    startLiveVerification()
+                }
+            }
+        } else {
+            discovery?.startDiscovery()
+        }
     }
 
     private fun renderDiscoveryState(state: DiscoveryUiState) {
@@ -340,7 +362,7 @@ class DevicePairingBottomSheet(
             LiveCheckStep.CHECK_FREE_SPACE -> Pair(binding.iconStep6, binding.tvStep6)
         }
 
-        val context = requireContext()
+        val context = context ?: return
         when (state) {
             is LiveCheckStepState.Pending -> {
                 resetStepView(icon, tv, step.displayName)
@@ -383,5 +405,22 @@ class DevicePairingBottomSheet(
 
     companion object {
         const val TAG = "DevicePairingBottomSheet"
+
+        fun newInstance(
+            host: String? = null,
+            port: Int = 8443,
+            tlsFingerprint: String? = null,
+            code: String? = null,
+            autoVerify: Boolean = false,
+            onPaired: ((PairedNode) -> Unit)? = null
+        ): DevicePairingBottomSheet {
+            return DevicePairingBottomSheet(onPaired).apply {
+                this.initialHost = host
+                this.initialPort = port
+                this.initialFingerprint = tlsFingerprint
+                this.initialCode = code
+                this.initialAutoVerify = autoVerify
+            }
+        }
     }
 }

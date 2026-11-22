@@ -96,9 +96,10 @@ class NodePairingValidator(
 
         // Step 2: TCP Connect
         onStepUpdate(LiveCheckStep.TCP_CONNECT, LiveCheckStepState.Running)
-        val tcpOk = httpClient.probeTcp(host, port, timeoutMs = 3000)
-        if (!tcpOk) {
-            val err = "Connection refused on port $port. Ensure the storage node is running."
+        val probeRes = httpClient.probeTcp(host, port, timeoutMs = 3000)
+        if (probeRes.isFailure) {
+            val ex = probeRes.exceptionOrNull() ?: ConnectException("Connection failed")
+            val err = mapErrorMessage(ex, host, port)
             onStepUpdate(LiveCheckStep.TCP_CONNECT, LiveCheckStepState.Failed(err))
             return@withContext PairingValidationResult.Failure(LiveCheckStep.TCP_CONNECT, err)
         }
@@ -179,8 +180,15 @@ class NodePairingValidator(
             return@withContext PairingValidationResult.Failure(LiveCheckStep.CHECK_FREE_SPACE, err)
         }
         val status = statusResult.getOrThrow()
-        val quotaGb = status.userQuota / (1024 * 1024 * 1024.0)
-        onStepUpdate(LiveCheckStep.CHECK_FREE_SPACE, LiveCheckStepState.Passed("Quota: ${String.format("%.1f", quotaGb)} GB available"))
+        val availBytes = if (status.availableBytes > 0L) status.availableBytes else status.userFree
+        val availGb = availBytes / (1024 * 1024 * 1024.0)
+        val stepMsg = if (status.userQuota > 0L) {
+            val quotaGb = status.userQuota / (1024 * 1024 * 1024.0)
+            "Quota: ${String.format(java.util.Locale.US, "%.1f", availGb)} GB of ${String.format(java.util.Locale.US, "%.1f", quotaGb)} GB available"
+        } else {
+            "Storage: ${String.format(java.util.Locale.US, "%.1f", availGb)} GB available (Unlimited quota)"
+        }
+        onStepUpdate(LiveCheckStep.CHECK_FREE_SPACE, LiveCheckStepState.Passed(stepMsg))
 
         val paired = PairedNode(
             nodeName = info.name,

@@ -1,6 +1,8 @@
 package com.example.piphotos.sync
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.room.InvalidationTracker
 import com.example.piphotos.BackupPreferences
@@ -34,14 +36,16 @@ data class SyncLedgerState(
     val currentFileIndex: Int = 0,
     val speedBytesPerSec: Long = 0L,
     val etaSeconds: Long = -1L,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val skippedCellularCount: Int = 0,
+    val skippedCellularExplanation: String? = null
 ) {
     val isAllBackedUp: Boolean get() = totalCount > 0 && doneCount >= totalCount
     val percentComplete: Int get() = if (totalCount > 0) ((doneCount.toDouble() / totalCount.toDouble()) * 100).toInt().coerceIn(0, 100) else 0
 }
 
 sealed class SyncOutcome {
-    data class Success(val uploadedCount: Int, val skippedCount: Int) : SyncOutcome()
+    data class Success(val uploadedCount: Int, val skippedCount: Int, val skippedCellularCount: Int = 0) : SyncOutcome()
     data class Interrupted(val error: SyncError) : SyncOutcome()
     object Cancelled : SyncOutcome()
 }
@@ -135,7 +139,12 @@ class SyncRepository private constructor(
         isCancelled: () -> Boolean,
         onProgressUpdate: (current: Int, total: Int, name: String) -> Unit
     ): SyncOutcome = withContext(Dispatchers.IO) {
-        _syncState.value = _syncState.value.copy(isSyncing = true, lastError = null)
+        _syncState.value = _syncState.value.copy(
+            isSyncing = true,
+            lastError = null,
+            skippedCellularCount = 0,
+            skippedCellularExplanation = null
+        )
 
         val initialQuota = refreshQuotaState()
         when (initialQuota.status) {
@@ -190,9 +199,13 @@ class SyncRepository private constructor(
 
             var uploadedCount = 0
             var skippedCount = 0
+            var skippedCellularCount = 0
+            var skippedCellularPhotos = 0
+            var skippedCellularVideos = 0
             var totalProcessed = 0
             var sessionBytesTransferred = 0L
             val sessionStartTimeMs = System.currentTimeMillis()
+            val isCellular = isCellularNetwork(context)
 
             // 3. Process in batches of 25: lazy hash -> batch check -> upload remaining
             val batches = pendingItems.chunked(25)
@@ -266,6 +279,14 @@ class SyncRepository private constructor(
                     }
 
                     val mediaItem = mediaItemMap[freshEntity.mediaId] ?: continue
+
+                    // Check cellular restrictions
+                    if (shouldSkipItemForCellular(mediaItem.isVideo, isCellular)) {
+                        skippedCellularCount++
+                        if (mediaItem.isVideo) skippedCellularVideos++ else skippedCellularPhotos++
+                        continue
+                    }
+
                     val hash = freshEntity.sha256!!
 
                     val filename = sanitizeFilename(mediaItem.displayName, mediaItem.mimeType, mediaItem.isVideo, mediaItem.id)
@@ -437,7 +458,22 @@ class SyncRepository private constructor(
                     )
                 }
             }
-            SyncOutcome.Success(uploadedCount, skippedCount)
+            val exp = if (skippedCellularCount > 0) {
+                when {
+                    skippedCellularVideos > 0 && skippedCellularPhotos > 0 ->
+                        "$skippedCellularPhotos photo(s) and $skippedCellularVideos video(s) paused (waiting for Wi-Fi)"
+                    skippedCellularVideos > 0 ->
+                        "$skippedCellularVideos video(s) paused (waiting for Wi-Fi)"
+                    else ->
+                        "$skippedCellularPhotos photo(s) paused (waiting for Wi-Fi)"
+                }
+            } else null
+
+            _syncState.value = _syncState.value.copy(
+                skippedCellularCount = skippedCellularCount,
+                skippedCellularExplanation = exp
+            )
+            SyncOutcome.Success(uploadedCount, skippedCount, skippedCellularCount)
         } catch (e: Exception) {
             val syncErr = SyncError.fromThrowable(e)
             _syncState.value = _syncState.value.copy(lastError = syncErr.message)
@@ -706,5 +742,35 @@ class SyncRepository private constructor(
             val finalBase = if (baseName.isNotBlank()) baseName else "media_$mediaId"
             return "$finalBase.$ext"
         }
+
+        fun shouldSkipForCellular(
+            isVideo: Boolean,
+            isCellular: Boolean,
+            allowPhotosOnCellular: Boolean,
+            allowVideosOnCellular: Boolean
+        ): Boolean {
+            if (!isCellular) return false
+            return if (isVideo) !allowVideosOnCellular else !allowPhotosOnCellular
+        }
+    }
+
+    fun isCellularNetwork(context: Context): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+            val active = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(active) ?: return false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun shouldSkipItemForCellular(isVideo: Boolean, isCellular: Boolean): Boolean {
+        return shouldSkipForCellular(
+            isVideo = isVideo,
+            isCellular = isCellular,
+            allowPhotosOnCellular = BackupPreferences.isCellularPhotosAllowed(context),
+            allowVideosOnCellular = BackupPreferences.isCellularVideosAllowed(context)
+        )
     }
 }

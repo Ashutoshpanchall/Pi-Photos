@@ -66,7 +66,8 @@ class MediaSyncWorker(
                     Result.success(
                         workDataOf(
                             KEY_RESULT_UPLOADED to outcome.uploadedCount,
-                            KEY_RESULT_SKIPPED to outcome.skippedCount
+                            KEY_RESULT_SKIPPED to outcome.skippedCount,
+                            KEY_RESULT_SKIPPED_CELLULAR to outcome.skippedCellularCount
                         )
                     )
                 }
@@ -142,14 +143,15 @@ class MediaSyncWorker(
 
         const val KEY_RESULT_UPLOADED = "result_uploaded"
         const val KEY_RESULT_SKIPPED = "result_skipped"
+        const val KEY_RESULT_SKIPPED_CELLULAR = "result_skipped_cellular"
         const val KEY_ERROR_REASON = "error_reason"
 
         fun schedulePeriodicSync(context: Context) {
-            val wifiOnly = BackupPreferences.isWifiOnly(context)
+            val allowCellular = BackupPreferences.isCellularPhotosAllowed(context) || BackupPreferences.isCellularVideosAllowed(context)
             val chargingOnly = BackupPreferences.isChargingOnly(context)
 
             val constraints = Constraints.Builder()
-                .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+                .setRequiredNetworkType(if (allowCellular) NetworkType.CONNECTED else NetworkType.UNMETERED)
                 .setRequiresCharging(chargingOnly)
                 .build()
 
@@ -165,11 +167,11 @@ class MediaSyncWorker(
         }
 
         fun enqueueImmediateSync(context: Context, force: Boolean = false) {
-            val wifiOnly = if (force) false else BackupPreferences.isWifiOnly(context)
+            val allowCellular = if (force) true else (BackupPreferences.isCellularPhotosAllowed(context) || BackupPreferences.isCellularVideosAllowed(context))
             val chargingOnly = if (force) false else BackupPreferences.isChargingOnly(context)
 
             val constraints = Constraints.Builder()
-                .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+                .setRequiredNetworkType(if (allowCellular) NetworkType.CONNECTED else NetworkType.UNMETERED)
                 .setRequiresCharging(chargingOnly)
                 .build()
 

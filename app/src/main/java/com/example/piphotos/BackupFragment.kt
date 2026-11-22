@@ -34,6 +34,8 @@ import com.example.piphotos.sync.QuotaStatus
 import com.example.piphotos.sync.SyncLedgerState
 import com.example.piphotos.sync.SyncNodePreferences
 import com.example.piphotos.sync.SyncRepository
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -47,6 +49,29 @@ class BackupFragment : Fragment() {
 
     private var connectionMonitor: ConnectionStateMonitor? = null
     private var lastObservedConnectionState: ConnectionState = ConnectionState.NotConfigured
+
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        if (!contents.isNullOrBlank()) {
+            val parsed = com.example.piphotos.sync.NodePairingValidator.parseQrCode(contents)
+            if (parsed != null) {
+                DevicePairingBottomSheet.newInstance(
+                    host = parsed.host,
+                    port = parsed.port,
+                    tlsFingerprint = parsed.tlsFingerprint,
+                    code = parsed.code,
+                    autoVerify = !parsed.code.isNullOrEmpty()
+                ) {
+                    updateBackupUiState()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        connectionMonitor?.checkNow()
+                    }
+                }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
+            } else {
+                Toast.makeText(requireContext(), "Could not parse QR code. Ensure it is a valid PiPhotos code.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     private val queueAdapter = QueueAdapter(
         onRetryItem = { item ->
@@ -119,6 +144,27 @@ class BackupFragment : Fragment() {
                     connectionMonitor?.checkNow()
                 }
             }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
+        }
+
+        binding.btnScanQrBackup.setOnClickListener {
+            val options = ScanOptions().apply {
+                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                setPrompt("Scan PiPhotos server pairing QR code")
+                setCameraId(0)
+                setBeepEnabled(false)
+                setBarcodeImageEnabled(false)
+                setOrientationLocked(false)
+            }
+            try {
+                qrScanLauncher.launch(options)
+            } catch (e: Exception) {
+                DevicePairingBottomSheet {
+                    updateBackupUiState()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        connectionMonitor?.checkNow()
+                    }
+                }.show(childFragmentManager, DevicePairingBottomSheet.TAG)
+            }
         }
 
         binding.cardBackupProgress.setOnClickListener {
@@ -195,15 +241,42 @@ class BackupFragment : Fragment() {
 
         // Initialize persistent backup preferences
         binding.switchWifi.isChecked = BackupPreferences.isWifiOnly(requireContext())
+        binding.switchCellularPhotos.isChecked = BackupPreferences.isCellularPhotosAllowed(requireContext())
+        binding.switchCellularVideos.isChecked = BackupPreferences.isCellularVideosAllowed(requireContext())
         binding.switchCharging.isChecked = BackupPreferences.isChargingOnly(requireContext())
         binding.switchVideos.isChecked = BackupPreferences.isIncludeVideos(requireContext())
 
-        binding.switchWifi.setOnCheckedChangeListener { _, isChecked ->
+        binding.switchWifi.setOnCheckedChangeListener { switch, isChecked ->
+            if (!switch.isPressed) return@setOnCheckedChangeListener
             val ctx = requireContext()
             BackupPreferences.setWifiOnly(ctx, isChecked)
+            binding.switchCellularPhotos.isChecked = BackupPreferences.isCellularPhotosAllowed(ctx)
+            binding.switchCellularVideos.isChecked = BackupPreferences.isCellularVideosAllowed(ctx)
             MediaSyncWorker.schedulePeriodicSync(ctx)
             updateBackupUiState()
             val msg = if (isChecked) "Sync constrained to Wi-Fi" else "Cellular sync allowed"
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+        }
+
+        binding.switchCellularPhotos.setOnCheckedChangeListener { switch, isChecked ->
+            if (!switch.isPressed) return@setOnCheckedChangeListener
+            val ctx = requireContext()
+            BackupPreferences.setCellularPhotosAllowed(ctx, isChecked)
+            binding.switchWifi.isChecked = BackupPreferences.isWifiOnly(ctx)
+            MediaSyncWorker.schedulePeriodicSync(ctx)
+            updateBackupUiState()
+            val msg = if (isChecked) "Photos allowed on mobile data" else "Photos restricted to Wi-Fi"
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+        }
+
+        binding.switchCellularVideos.setOnCheckedChangeListener { switch, isChecked ->
+            if (!switch.isPressed) return@setOnCheckedChangeListener
+            val ctx = requireContext()
+            BackupPreferences.setCellularVideosAllowed(ctx, isChecked)
+            binding.switchWifi.isChecked = BackupPreferences.isWifiOnly(ctx)
+            MediaSyncWorker.schedulePeriodicSync(ctx)
+            updateBackupUiState()
+            val msg = if (isChecked) "Videos allowed on mobile data" else "Videos restricted to Wi-Fi"
             Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
         }
 
@@ -257,7 +330,9 @@ class BackupFragment : Fragment() {
                     ContextCompat.getColor(context, R.color.status_green)
                 )
                 val nodeName = paired?.nodeName ?: "Storage Node"
-                binding.tvBackupSubtitle.text = "Connected to $nodeName"
+                val activeAddr = SyncNodePreferences.getActiveAddress(context)
+                val addrSnippet = if (!activeAddr.isNullOrEmpty()) " • $activeAddr" else ""
+                binding.tvBackupSubtitle.text = "Connected to $nodeName$addrSnippet"
             }
             is ConnectionState.ReachableAuthNeeded -> {
                 binding.dotConnectionStatus.backgroundTintList = ColorStateList.valueOf(
@@ -331,6 +406,8 @@ class BackupFragment : Fragment() {
 
         // Freeze upload condition switches during active sync
         binding.switchWifi.isEnabled = !state.isSyncing
+        binding.switchCellularPhotos.isEnabled = !state.isSyncing
+        binding.switchCellularVideos.isEnabled = !state.isSyncing
         binding.switchCharging.isEnabled = !state.isSyncing
         binding.switchVideos.isEnabled = !state.isSyncing
 
@@ -436,19 +513,22 @@ class BackupFragment : Fragment() {
             val usageSummary = QuotaStateManager.formatUsageSummary(quota)
             val freeSubtitle = QuotaStateManager.formatFreeSubtitle(quota)
             val lastUpdated = QuotaStateManager.formatLastUpdated(quota.lastRefreshedAt)
+            val cellularNote = if (state.skippedCellularCount > 0) {
+                " • " + (state.skippedCellularExplanation ?: "${state.skippedCellularCount} waiting for Wi-Fi")
+            } else ""
 
             binding.tvBackupBytes.text = usageSummary
             binding.tvLastBackupTime.text = "$freeSubtitle · $lastUpdated"
 
             if (state.isAllBackedUp) {
                 binding.tvBackupProgressTitle.text = "All Photos Backed Up"
-                binding.tvBackupProgressSubtitle.text = usageSummary
+                binding.tvBackupProgressSubtitle.text = "$usageSummary$cellularNote"
             } else if (state.doneCount > 0) {
                 binding.tvBackupProgressTitle.text = "Ready to Back Up"
-                binding.tvBackupProgressSubtitle.text = "${state.doneCount} of ${state.totalCount} backed up · $freeSubtitle"
+                binding.tvBackupProgressSubtitle.text = "${state.doneCount} of ${state.totalCount} backed up · $freeSubtitle$cellularNote"
             } else {
                 binding.tvBackupProgressTitle.text = "Ready to Back Up"
-                binding.tvBackupProgressSubtitle.text = "Connected · $freeSubtitle"
+                binding.tvBackupProgressSubtitle.text = "Connected · $freeSubtitle$cellularNote"
             }
         }
     }

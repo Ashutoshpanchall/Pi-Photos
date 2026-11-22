@@ -227,6 +227,23 @@ class PiDeviceDiscovery(
             tlsFingerprint = attrs["tls_fp"]
         )
 
+        // Dynamic IP renewal: if paired node matches discovered service, update lastIp
+        if (SyncNodePreferences.isPaired(context)) {
+            val storedFp = SyncNodePreferences.getServerFingerprint(context)
+            val storedId = SyncNodePreferences.getServerId(context)
+            val nodeFp = node.tlsFingerprint
+            val nodeId = attrs["server_id"]
+            val matchId = !storedId.isNullOrBlank() && storedId == nodeId
+            val matchFp = !storedFp.isNullOrBlank() && storedFp == nodeFp
+            if (matchId || matchFp) {
+                if (hostAddress.matches(Regex("""\d+\.\d+\.\d+\.\d+"""))) {
+                    SyncNodePreferences.updateLastIp(context, hostAddress)
+                } else {
+                    SyncNodePreferences.saveAddressCandidates(context, mdnsHost = hostAddress)
+                }
+            }
+        }
+
         synchronized(discoveredMap) {
             discoveredMap[node.name] = node
             updateDiscoveredNodes()
@@ -309,9 +326,18 @@ class PiDeviceDiscovery(
                     name = info.name,
                     hostAddress = "piphotos.local",
                     port = 8443,
-                    attributes = if (fp != null) mapOf("tls_fp" to fp) else emptyMap(),
+                    attributes = if (fp != null) mapOf("tls_fp" to fp, "server_id" to info.id) else mapOf("server_id" to info.id),
                     tlsFingerprint = fp
                 )
+                if (SyncNodePreferences.isPaired(context)) {
+                    val storedFp = SyncNodePreferences.getServerFingerprint(context)
+                    val storedId = SyncNodePreferences.getServerId(context)
+                    val matchId = !storedId.isNullOrBlank() && storedId == info.id
+                    val matchFp = !storedFp.isNullOrBlank() && storedFp == fp
+                    if (matchId || matchFp) {
+                        SyncNodePreferences.saveAddressCandidates(context, mdnsHost = "piphotos.local")
+                    }
+                }
                 synchronized(discoveredMap) {
                     discoveredMap[node.name] = node
                     updateDiscoveredNodes()
@@ -332,7 +358,7 @@ class PiDeviceDiscovery(
                 semaphore.withPermit {
                     val ip = "$prefix$i"
                     if (ip == localIpv4) return@withPermit
-                    val portOpen = httpClient.probeTcp(ip, 8443, timeoutMs = 400)
+                    val portOpen = httpClient.probeTcp(ip, 8443, timeoutMs = 400).isSuccess
                     if (portOpen) {
                         val res = httpClient.getInfo("https://$ip:8443")
                         if (res.isSuccess) {
@@ -341,9 +367,18 @@ class PiDeviceDiscovery(
                                 name = info.name,
                                 hostAddress = ip,
                                 port = 8443,
-                                attributes = if (fp != null) mapOf("tls_fp" to fp) else emptyMap(),
+                                attributes = if (fp != null) mapOf("tls_fp" to fp, "server_id" to info.id) else mapOf("server_id" to info.id),
                                 tlsFingerprint = fp
                             )
+                            if (SyncNodePreferences.isPaired(context)) {
+                                val storedFp = SyncNodePreferences.getServerFingerprint(context)
+                                val storedId = SyncNodePreferences.getServerId(context)
+                                val matchId = !storedId.isNullOrBlank() && storedId == info.id
+                                val matchFp = !storedFp.isNullOrBlank() && storedFp == fp
+                                if (matchId || matchFp) {
+                                    SyncNodePreferences.updateLastIp(context, ip)
+                                }
+                            }
                             synchronized(discoveredMap) {
                                 discoveredMap[node.name] = node
                                 updateDiscoveredNodes()

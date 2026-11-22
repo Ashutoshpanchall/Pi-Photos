@@ -17,7 +17,10 @@ data class QuotaState(
     val freeBytes: Long = 0L,
     val lastRefreshedAt: Long = 0L,
     val isStale: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val availableBytes: Long = 0L,
+    val allocationBytes: Long = 0L,
+    val allocationUsedBytes: Long = 0L
 ) {
     val isFullOrExceeded: Boolean get() = status is QuotaStatus.Full
     val isBlocked: Boolean get() = status is QuotaStatus.Full || status is QuotaStatus.AccountDisabled || status is QuotaStatus.DeviceRevoked

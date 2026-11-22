@@ -82,11 +82,32 @@ class ConnectionStateMonitor(
             return@withContext
         }
 
-        val statusResult = httpClient.getStatus(
-            endpointUrl = paired.endpointUrl,
+        var activeUrl = paired.endpointUrl
+        var statusResult = httpClient.getStatus(
+            endpointUrl = activeUrl,
             authToken = paired.authToken,
             expectedFingerprint = paired.tlsFingerprint.ifEmpty { null }
         )
+
+        // Improvement 2: Multiple saved addresses per server tried in order
+        if (statusResult.isFailure) {
+            val candidates = SyncNodePreferences.getCandidateAddresses(context)
+            if (candidates.size > 1) {
+                val resolved = httpClient.resolveActiveCandidate(
+                    candidates = candidates,
+                    expectedFingerprint = paired.tlsFingerprint.ifEmpty { null }
+                )
+                if (resolved != null) {
+                    activeUrl = resolved.first
+                    SyncNodePreferences.setActiveAddress(context, activeUrl)
+                    statusResult = httpClient.getStatus(
+                        endpointUrl = activeUrl,
+                        authToken = paired.authToken,
+                        expectedFingerprint = paired.tlsFingerprint.ifEmpty { null }
+                    )
+                }
+            }
+        }
 
         if (statusResult.isSuccess) {
             SyncNodePreferences.updateLastSeen(context)
@@ -102,7 +123,7 @@ class ConnectionStateMonitor(
 
         // Check if endpoint is at least reachable via /info
         val infoResult = httpClient.getInfo(
-            endpointUrl = paired.endpointUrl,
+            endpointUrl = activeUrl,
             expectedFingerprint = paired.tlsFingerprint.ifEmpty { null }
         )
 

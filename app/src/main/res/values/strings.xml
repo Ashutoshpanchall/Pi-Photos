@@ -53,6 +53,8 @@
     <string name="backup_eta">3 mins remaining</string>
     <string name="section_upload_conditions">UPLOAD CONDITIONS</string>
     <string name="cond_wifi_only">Back up over Wi-Fi only</string>
+    <string name="cond_cellular_photos">Mobile data for photos</string>
+    <string name="cond_cellular_videos">Mobile data for videos</string>
     <string name="cond_charging_only">Back up only while charging</string>
     <string name="cond_include_videos">Include videos</string>
     <string name="section_monitored_folders">MONITORED FOLDERS</string>
@@ -67,6 +69,7 @@
     <string name="error_file">--</string>
     <string name="error_reason">Network timeout · Read error</string>
     <string name="action_retry">Retry</string>
+    <string name="action_scan_qr">Scan QR</string>
     <string name="backup_footer_title">Stored on Your Own Device</string>
     <string name="backup_footer_subtitle">Photos remain private on this device</string>
     

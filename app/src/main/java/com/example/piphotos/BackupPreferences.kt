@@ -10,6 +10,9 @@ object BackupPreferences {
     private const val KEY_CHARGING_ONLY = "pref_charging_only"
     private const val KEY_INCLUDE_VIDEOS = "pref_include_videos"
 
+    private const val KEY_CELLULAR_PHOTOS = "pref_cellular_photos"
+    private const val KEY_CELLULAR_VIDEOS = "pref_cellular_videos"
+
     private const val KEY_FOLDER_CAMERA = "pref_folder_camera"
     private const val KEY_FOLDER_SCREENSHOTS = "pref_folder_screenshots"
     private const val KEY_FOLDER_WHATSAPP = "pref_folder_whatsapp"
@@ -21,7 +24,46 @@ object BackupPreferences {
     }
 
     fun isWifiOnly(context: Context): Boolean = getPrefs(context).getBoolean(KEY_WIFI_ONLY, true)
-    fun setWifiOnly(context: Context, value: Boolean) = getPrefs(context).edit().putBoolean(KEY_WIFI_ONLY, value).apply()
+
+    fun setWifiOnly(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_WIFI_ONLY, value).apply()
+        if (value) {
+            setCellularPhotosAllowed(context, false)
+            setCellularVideosAllowed(context, false)
+        } else {
+            setCellularPhotosAllowed(context, true)
+        }
+    }
+
+    fun isCellularPhotosAllowed(context: Context): Boolean {
+        return if (getPrefs(context).contains(KEY_CELLULAR_PHOTOS)) {
+            getPrefs(context).getBoolean(KEY_CELLULAR_PHOTOS, false)
+        } else {
+            !isWifiOnly(context)
+        }
+    }
+
+    fun setCellularPhotosAllowed(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_CELLULAR_PHOTOS, value).apply()
+        if (value) {
+            getPrefs(context).edit().putBoolean(KEY_WIFI_ONLY, false).apply()
+        } else if (!isCellularVideosAllowed(context)) {
+            getPrefs(context).edit().putBoolean(KEY_WIFI_ONLY, true).apply()
+        }
+    }
+
+    fun isCellularVideosAllowed(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_CELLULAR_VIDEOS, false)
+    }
+
+    fun setCellularVideosAllowed(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_CELLULAR_VIDEOS, value).apply()
+        if (value) {
+            getPrefs(context).edit().putBoolean(KEY_WIFI_ONLY, false).apply()
+        } else if (!isCellularPhotosAllowed(context)) {
+            getPrefs(context).edit().putBoolean(KEY_WIFI_ONLY, true).apply()
+        }
+    }
 
     fun isChargingOnly(context: Context): Boolean = getPrefs(context).getBoolean(KEY_CHARGING_ONLY, false)
     fun setChargingOnly(context: Context, value: Boolean) = getPrefs(context).edit().putBoolean(KEY_CHARGING_ONLY, value).apply()

@@ -25,14 +25,18 @@ object QuotaStateManager {
         nowMs: Long = System.currentTimeMillis()
     ): QuotaState {
         val qStatus = computeStatus(status.userUsed, status.userQuota)
+        val freeBytes = if (status.availableBytes > 0L) status.availableBytes else status.userFree
         return QuotaState(
             status = qStatus,
             usedBytes = status.userUsed,
             quotaBytes = status.userQuota,
-            freeBytes = status.userFree,
+            freeBytes = freeBytes,
             lastRefreshedAt = nowMs,
             isStale = false,
-            errorMessage = null
+            errorMessage = null,
+            availableBytes = freeBytes,
+            allocationBytes = status.allocationBytes,
+            allocationUsedBytes = status.allocationUsedBytes
         )
     }
 
@@ -40,7 +44,11 @@ object QuotaStateManager {
         me: MeResponse,
         nowMs: Long = System.currentTimeMillis()
     ): QuotaState {
-        val freeBytes = if (me.quotaBytes > 0) (me.quotaBytes - me.usedBytes).coerceAtLeast(0L) else 0L
+        val freeBytes = if (me.availableBytes > 0L) {
+            me.availableBytes
+        } else if (me.quotaBytes > 0) {
+            (me.quotaBytes - me.usedBytes).coerceAtLeast(0L)
+        } else 0L
         val status = computeStatus(me.usedBytes, me.quotaBytes)
         return QuotaState(
             status = status,
@@ -49,7 +57,10 @@ object QuotaStateManager {
             freeBytes = freeBytes,
             lastRefreshedAt = nowMs,
             isStale = false,
-            errorMessage = null
+            errorMessage = null,
+            availableBytes = freeBytes,
+            allocationBytes = me.allocationBytes,
+            allocationUsedBytes = me.allocationUsedBytes
         )
     }
 
@@ -113,7 +124,11 @@ object QuotaStateManager {
     fun formatUsageSummary(state: QuotaState): String {
         val usedStr = formatBytes(state.usedBytes)
         return if (state.quotaBytes <= 0L) {
-            "$usedStr used"
+            if (state.availableBytes > 0L) {
+                "$usedStr used · ${formatBytes(state.availableBytes)} available"
+            } else {
+                "$usedStr used"
+            }
         } else {
             val quotaStr = formatBytes(state.quotaBytes)
             "$usedStr of $quotaStr used"
@@ -122,10 +137,15 @@ object QuotaStateManager {
 
     fun formatFreeSubtitle(state: QuotaState): String {
         return if (state.quotaBytes <= 0L) {
-            "Unlimited storage"
+            if (state.availableBytes > 0L) {
+                "${formatBytes(state.availableBytes)} available"
+            } else {
+                "Unlimited storage"
+            }
         } else {
-            val freeStr = formatBytes(state.freeBytes)
-            "$freeStr free"
+            val freeBytes = if (state.availableBytes > 0L) state.availableBytes else state.freeBytes
+            val freeStr = formatBytes(freeBytes)
+            if (state.availableBytes > 0L) "$freeStr available" else "$freeStr free"
         }
     }
 

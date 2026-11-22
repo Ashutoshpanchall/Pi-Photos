@@ -39,6 +39,13 @@ object SyncNodePreferences {
     private const val KEY_USED_BYTES = "used_bytes"
     private const val KEY_DEVICE_NAME = "device_name"
 
+    // Candidate server address fallback keys
+    private const val KEY_LAST_IP = "last_ip"
+    private const val KEY_MDNS_HOST = "mdns_host"
+    private const val KEY_MANUAL_HOST = "manual_host"
+    private const val KEY_PORT = "node_port"
+    private const val KEY_ACTIVE_ADDRESS = "active_address"
+
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -82,7 +89,11 @@ object SyncNodePreferences {
         serverId: String = ""
     ) {
         val now = System.currentTimeMillis()
-        getPrefs(context).edit()
+        val uri = try { java.net.URI(endpointUrl) } catch (_: Exception) { null }
+        val host = uri?.host ?: ""
+        val port = if (uri != null && uri.port > 0) uri.port else 8443
+
+        val editor = getPrefs(context).edit()
             .putString(KEY_NODE_NAME, name)
             .putString(KEY_ENDPOINT_URL, endpointUrl)
             .putString(KEY_AUTH_TOKEN, authToken)
@@ -92,7 +103,104 @@ object SyncNodePreferences {
             .putString(KEY_DEVICE_ID, deviceId)
             .putString(KEY_SERVER_ID, serverId)
             .putLong(KEY_LAST_SEEN_AT, now)
+            .putInt(KEY_PORT, port)
+            .putString(KEY_ACTIVE_ADDRESS, endpointUrl)
+
+        if (host.matches(Regex("""\d+\.\d+\.\d+\.\d+"""))) {
+            editor.putString(KEY_LAST_IP, host)
+        } else if (host.endsWith(".local", ignoreCase = true)) {
+            editor.putString(KEY_MDNS_HOST, host)
+        } else if (host.isNotEmpty()) {
+            editor.putString(KEY_MANUAL_HOST, host)
+        }
+        editor.apply()
+    }
+
+    fun saveAddressCandidates(
+        context: Context,
+        lastIp: String? = null,
+        mdnsHost: String? = null,
+        manualHost: String? = null,
+        port: Int = 8443
+    ) {
+        val editor = getPrefs(context).edit()
+        if (!lastIp.isNullOrBlank()) editor.putString(KEY_LAST_IP, lastIp.trim())
+        if (!mdnsHost.isNullOrBlank()) editor.putString(KEY_MDNS_HOST, mdnsHost.trim())
+        if (!manualHost.isNullOrBlank()) editor.putString(KEY_MANUAL_HOST, manualHost.trim())
+        if (port > 0) editor.putInt(KEY_PORT, port)
+        editor.apply()
+    }
+
+    fun updateLastIp(context: Context, newIp: String) {
+        val cleanIp = newIp.trim()
+        val port = getPort(context)
+        getPrefs(context).edit()
+            .putString(KEY_LAST_IP, cleanIp)
+            .putString(KEY_ENDPOINT_URL, "https://$cleanIp:$port")
             .apply()
+    }
+
+    fun getLastIp(context: Context): String? {
+        return getPrefs(context).getString(KEY_LAST_IP, null)
+    }
+
+    fun getPort(context: Context): Int {
+        val port = getPrefs(context).getInt(KEY_PORT, 0)
+        if (port > 0) return port
+        val url = getPrefs(context).getString(KEY_ENDPOINT_URL, null) ?: return 8443
+        return try {
+            val uri = java.net.URI(url)
+            if (uri.port > 0) uri.port else 8443
+        } catch (_: Exception) {
+            8443
+        }
+    }
+
+    fun getCandidateAddresses(context: Context): List<String> {
+        val prefs = getPrefs(context)
+        val port = getPort(context)
+        val lastIp = prefs.getString(KEY_LAST_IP, null)
+        val mdnsHost = prefs.getString(KEY_MDNS_HOST, null)
+        val manualHost = prefs.getString(KEY_MANUAL_HOST, null)
+        val currentUrl = prefs.getString(KEY_ENDPOINT_URL, null)
+
+        val rawCandidates = mutableListOf<String>()
+        // 1. Last known IP
+        if (!lastIp.isNullOrBlank()) {
+            rawCandidates.add("https://${lastIp.trim()}:$port")
+        }
+        // 2. .local mDNS hostname
+        if (!mdnsHost.isNullOrBlank()) {
+            val cleanMdns = if (mdnsHost.endsWith(".local", ignoreCase = true)) mdnsHost else "$mdnsHost.local"
+            rawCandidates.add("https://${cleanMdns.trim()}:$port")
+        }
+        // 3. Manual address
+        if (!manualHost.isNullOrBlank()) {
+            val formatted = if (manualHost.startsWith("http://") || manualHost.startsWith("https://")) {
+                manualHost.trim()
+            } else {
+                "https://${manualHost.trim()}:$port"
+            }
+            rawCandidates.add(formatted)
+        }
+        // 4. Current endpoint URL fallback
+        if (!currentUrl.isNullOrBlank() && !rawCandidates.contains(currentUrl)) {
+            rawCandidates.add(currentUrl)
+        }
+
+        return rawCandidates.distinct()
+    }
+
+    fun setActiveAddress(context: Context, address: String) {
+        getPrefs(context).edit()
+            .putString(KEY_ACTIVE_ADDRESS, address)
+            .putString(KEY_ENDPOINT_URL, address)
+            .apply()
+    }
+
+    fun getActiveAddress(context: Context): String? {
+        return getPrefs(context).getString(KEY_ACTIVE_ADDRESS, null)
+            ?: getPrefs(context).getString(KEY_ENDPOINT_URL, null)
     }
 
     fun updateLastSeen(context: Context, timestamp: Long = System.currentTimeMillis()) {
@@ -170,6 +278,10 @@ object SyncNodePreferences {
     fun getNodeName(context: Context): String? = getPairedNode(context)?.nodeName
 
     fun getTlsFingerprint(context: Context): String? = getPairedNode(context)?.tlsFingerprint
+
+    fun getServerFingerprint(context: Context): String? = getTlsFingerprint(context)
+
+    fun getServerId(context: Context): String? = getPairedNode(context)?.serverId
 
     fun getAuthToken(context: Context): String? = getPairedNode(context)?.authToken
 

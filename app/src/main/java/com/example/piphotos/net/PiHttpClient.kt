@@ -42,7 +42,10 @@ data class ServerStatus(
     val userQuota: Long,
     val userUsed: Long,
     val userFree: Long,
-    val userFileCount: Int = 0
+    val userFileCount: Int = 0,
+    val availableBytes: Long = 0L,
+    val allocationBytes: Long = 0L,
+    val allocationUsedBytes: Long = 0L
 )
 
 data class ServerFolderInfo(
@@ -116,16 +119,16 @@ class PiHttpClient(
         return pair
     }
 
-    suspend fun probeTcp(host: String, port: Int, timeoutMs: Int = 2000): Boolean = withContext(Dispatchers.IO) {
+    suspend fun probeTcp(host: String, port: Int, timeoutMs: Int = 2000): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val wifiNetwork = getActiveWifiNetwork()
             val socket = wifiNetwork?.socketFactory?.createSocket() ?: Socket()
             socket.use { s ->
                 s.connect(InetSocketAddress(host, port), timeoutMs)
-                true
+                Result.success(Unit)
             }
         } catch (e: Exception) {
-            false
+            Result.failure(e)
         }
     }
 
@@ -160,6 +163,43 @@ class PiHttpClient(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun resolveActiveCandidate(
+        candidates: List<String>,
+        expectedFingerprint: String? = null,
+        candidateTimeoutMs: Long = 2000
+    ): Pair<String, ServerInfo>? = withContext(Dispatchers.IO) {
+        for (candidateUrl in candidates) {
+            try {
+                val (client, _) = buildClient(
+                    expectedFingerprint,
+                    connectTimeoutSec = (candidateTimeoutMs / 1000).coerceAtLeast(1L),
+                    readTimeoutSec = 3
+                )
+                val request = Request.Builder()
+                    .url("$candidateUrl/api/v1/info")
+                    .get()
+                    .build()
+                client.newCall(request).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val body = resp.body?.string() ?: ""
+                        val json = JSONObject(body)
+                        val info = ServerInfo(
+                            id = json.optString("id", ""),
+                            name = json.optString("name", "Home Vault"),
+                            version = json.optString("version", "1.0"),
+                            protocolVersion = json.optInt("protocol_version", 1),
+                            pairingOpen = json.optBoolean("pairing_open", false)
+                        )
+                        return@withContext Pair(candidateUrl, info)
+                    }
+                }
+            } catch (_: Exception) {
+                // Try next candidate
+            }
+        }
+        null
     }
 
     suspend fun pairDevice(
@@ -242,6 +282,9 @@ class PiHttpClient(
                 val uUsed = user.optLong("used_bytes", user.optLong("used", 0L))
                 val uFree = user.optLong("free_bytes", user.optLong("free", 0L))
                 val uCount = user.optInt("file_count", 0)
+                val available = user.optLong("available_bytes", uFree)
+                val alloc = user.optLong("allocation_bytes", 0L)
+                val allocUsed = user.optLong("allocation_used_bytes", 0L)
 
                 val status = ServerStatus(
                     diskTotal = total,
@@ -251,7 +294,10 @@ class PiHttpClient(
                     userQuota = quota,
                     userUsed = uUsed,
                     userFree = uFree,
-                    userFileCount = uCount
+                    userFileCount = uCount,
+                    availableBytes = available,
+                    allocationBytes = alloc,
+                    allocationUsedBytes = allocUsed
                 )
                 Result.success(status)
             }
@@ -468,7 +514,10 @@ class PiHttpClient(
                         quotaBytes = json.optLong("quota_bytes", 0L),
                         usedBytes = json.optLong("used_bytes", 0L),
                         deviceId = json.optString("device_id", ""),
-                        deviceName = json.optString("device_name", "")
+                        deviceName = json.optString("device_name", ""),
+                        availableBytes = json.optLong("available_bytes", 0L),
+                        allocationBytes = json.optLong("allocation_bytes", 0L),
+                        allocationUsedBytes = json.optLong("allocation_used_bytes", 0L)
                     )
                 )
             }
@@ -863,7 +912,10 @@ data class MeResponse(
     val quotaBytes: Long,      // 0 = unlimited
     val usedBytes: Long,
     val deviceId: String,
-    val deviceName: String
+    val deviceName: String,
+    val availableBytes: Long = 0L,
+    val allocationBytes: Long = 0L,
+    val allocationUsedBytes: Long = 0L
 )
 
 /** User file metadata as returned by GET /api/v1/files. */
