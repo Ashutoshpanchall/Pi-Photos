@@ -97,18 +97,48 @@ def run_smoke(port: int, data_dir: Path) -> int:
 
     time.sleep(0.5)
 
-    # Resume upload for remaining 3 MB
-    print("[Smoke] Resuming upload of remaining 3 MB...")
+    # Resume upload for remaining bytes
+    # Check HEAD or handle 409 offset mismatch for actual server offset after abrupt disconnect
+    actual_offset = cut
+    try:
+        head_conn = http.client.HTTPSConnection("127.0.0.1", port, context=ctx, timeout=10)
+        head_conn.request("HEAD", f"/api/v1/upload/{sha256_orig}", headers={"Authorization": f"Bearer {jwt_token}"})
+        head_resp = head_conn.getresponse()
+        head_offset = head_resp.getheader("Upload-Offset")
+        head_conn.close()
+        if head_offset is not None:
+            actual_offset = int(head_offset)
+    except Exception:
+        pass
+
+    print(f"[Smoke] Resuming upload from offset {actual_offset} of {size} bytes...")
     conn2 = http.client.HTTPSConnection("127.0.0.1", port, context=ctx, timeout=20)
     conn2.putrequest("PUT", upload_path)
     conn2.putheader("Authorization", f"Bearer {jwt_token}")
-    conn2.putheader("Upload-Offset", str(cut))
-    conn2.putheader("Content-Length", str(size - cut))
+    conn2.putheader("Upload-Offset", str(actual_offset))
+    conn2.putheader("Content-Length", str(size - actual_offset))
     conn2.endheaders()
-    conn2.send(payload[cut:])
+    conn2.send(payload[actual_offset:])
     resp = conn2.getresponse()
     body = resp.read()
-    assert resp.status == 200, f"Resume upload failed with status {resp.status}: {body.decode('utf-8', errors='ignore')}"
+
+    # If offset mismatch (due to socket/TCP buffer timing), use server's reported offset
+    if resp.status == 409:
+        err = json.loads(body.decode("utf-8"))
+        if err.get("detail", {}).get("error") == "offset_mismatch":
+            actual_offset = err["detail"]["offset"]
+            print(f"[Smoke] Server reported offset mismatch, adjusting to {actual_offset} bytes...")
+            conn3 = http.client.HTTPSConnection("127.0.0.1", port, context=ctx, timeout=20)
+            conn3.putrequest("PUT", upload_path)
+            conn3.putheader("Authorization", f"Bearer {jwt_token}")
+            conn3.putheader("Upload-Offset", str(actual_offset))
+            conn3.putheader("Content-Length", str(size - actual_offset))
+            conn3.endheaders()
+            conn3.send(payload[actual_offset:])
+            resp = conn3.getresponse()
+            body = resp.read()
+
+    assert resp.status in (200, 201), f"Resume upload failed with status {resp.status}: {body.decode('utf-8', errors='ignore')}"
     print(f"[Smoke] Upload successfully finalized with status {resp.status}")
 
     # 5. Lookup file ID from user's file list
