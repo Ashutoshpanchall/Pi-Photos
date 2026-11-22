@@ -75,9 +75,16 @@ class TestServerDoctorChecks:
 
     def test_hard_links_supported(self, doctor_paths):
         doctor = ServerDoctor(doctor_paths)
+        real_stat = os.stat
         fake_stat = os.stat_result((stat.S_IFREG | 0o644, 12345, 1, 1, 1000, 1000, 100, 0, 0, 0))
+
+        def selective_os_stat(path, *args, **kwargs):
+            if ".doctor_hl" in str(path):
+                return fake_stat
+            return real_stat(path, *args, **kwargs)
+
         with patch("os.link", return_value=None), \
-             patch("os.stat", return_value=fake_stat):
+             patch("os.stat", side_effect=selective_os_stat):
             doctor.check_hard_links()
             assert any(r.name == "hard_links" and r.status == "PASS" for r in doctor.results)
 

@@ -53,14 +53,14 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 # 1. Detect elevation and environment
 # ---------------------------------------------------------------------------
-$isWindows = $false
+$onWindows = $false
 try {
-    $isWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+    $onWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 } catch {
-    $isWindows = ($env:OS -like "*Windows*")
+    $onWindows = ($env:OS -like "*Windows*")
 }
 
-if ($isWindows) {
+if ($onWindows) {
     try {
         $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     } catch {
