@@ -58,7 +58,8 @@ PiPhotos is **pre-release software**, built and maintained by one developer.
 | Gallery: timeline, viewer, video, albums, favourites, Bin | Implemented |
 | Backup to your own node: discovery, pairing, resumable uploads | Implemented, unit-tested |
 | Several users on one node, quotas, invites | Implemented, unit-tested |
-| One-command server installer (Windows, macOS, Linux, Pi) | Implemented ([docs/SERVER_SETUP.md](docs/SERVER_SETUP.md)) |
+| One-command server installer (Windows, macOS, Linux, Pi) | Implemented. The automated install check passes on Linux and Windows; the macOS check currently fails at its upload/resume step and is being fixed ([docs/SERVER_SETUP.md](docs/SERVER_SETUP.md)) |
+| Next set of improvements (storage allocation, desktop app, packaging) | In progress on separate branches, **not merged into `main` yet** (see [Roadmap](#roadmap)) |
 | Performance tooling | Added; measured results are pending (see [`docs/PERF.md`](docs/PERF.md)) |
 | End-to-end test on a real phone against a real Raspberry Pi | **Not done yet** (see [`docs/DEVICE_TEST.md`](docs/DEVICE_TEST.md)) |
 | Encryption at rest | Not implemented |
@@ -78,7 +79,7 @@ Please treat it as a project to try, not yet as the only copy of your memories. 
 
 ### Backup to your own storage node
 
-- **Discovery that explains itself.** mDNS discovery, then a fallback probe of your local subnet, then manual address entry or a QR code. When nothing is found, the app shows a checklist and does not spin forever.
+- **Discovery that explains itself.** mDNS discovery, then a fallback probe of your local subnet, then manual address entry or a live camera QR scanner. When nothing is found, the app shows a checklist and does not spin forever.
 - **Live pairing check.** Six visible steps (resolve, connect, protocol handshake, certificate, pairing code, storage check). A node is saved only if all of them pass.
 - **Resumable uploads.** Files are streamed (never loaded fully into memory), identified by SHA-256 so duplicates are skipped, and resumed from the last byte after an interruption.
 - **Honest status.** A connection indicator, progress ring, speed and time remaining, a queue with per-file state and retry, and an activity log. Errors are typed (unreachable, certificate changed, quota full, disk full, account disabled) and each shows a clear action.
@@ -266,18 +267,25 @@ Pi-Photos/
 │       ├── db/             Room entities and DAOs
 │       └── perf/           debug-only performance tracking
 ├── server/                 Storage node (Python)
-│   ├── src/piphotos_server/
-│   │   ├── cli.py          piphotos-server CLI command runner
-│   │   ├── main.py         FastAPI endpoints
-│   │   ├── paths.py        OS-specific data directories
-│   │   ├── service.py      systemd, launchd, scheduled-task manager
+│   ├── main.py             FastAPI endpoints
+│   ├── auth.py             pairing, tokens, rate limits
+│   ├── database.py         SQLite layer
+│   ├── storage.py          file layout and path safety
+│   ├── discovery.py        mDNS advertising
+│   ├── tls_cert.py         self-signed certificate handling
+│   ├── models.py           request and response models
+│   ├── run.sh, run.ps1     start scripts (create venv, install, run)
+│   ├── piphotos.service    systemd unit
+│   ├── Dockerfile
+│   ├── piphotos_server/    command line and service tooling
+│   │   ├── cli.py          piphotos-server command runner
 │   │   ├── doctor.py       diagnostic self-checks
-│   │   ├── storage.py      file layout and path safety
-│   │   ├── database.py     SQLite layer
-│   │   ├── auth.py         pairing, tokens, rate limits
-│   │   └── discovery.py    mDNS advertising
-│   ├── tests/              server tests (161 tests)
+│   │   ├── local_admin.py  local administration helpers
+│   │   ├── paths.py        OS-specific data directories
+│   │   └── service.py      systemd, launchd, scheduled-task manager
+│   ├── tests/              server tests (164 tests)
 │   └── bench/              upload benchmark scripts
+├── docker-compose.yml      run the node in a container
 ├── install/                One-command installers
 │   ├── install.sh          POSIX shell installer (Linux, macOS, Pi)
 │   └── install.ps1         PowerShell installer (Windows)
@@ -287,8 +295,9 @@ Pi-Photos/
 │   ├── DEVICE_TEST.md      manual phone-and-node test checklist
 │   └── PERF.md             performance targets and measurements
 ├── scripts/perf/           measurement scripts (adb)
-├── .github/workflows/      CI matrix, binary releases, Android CI
-└── AGENTS.md               engineering rules for contributors and AI agents
+├── .github/workflows/      android-ci, install-smoke, release-binaries
+├── AGENTS.md               engineering rules for contributors and AI agents
+└── .gemini/GEMINI.md       agent instructions
 ```
 
 ## Development
@@ -307,7 +316,7 @@ pip install -e ".[dev]"
 python -m pytest tests -q
 ```
 
-There are 108 Android unit tests and 161 server tests. CI runs the Android tests, the release leak check and the server tests on each push to `main`, `feature/**` and `fix/**`, and on pull requests to `main`.
+There are 108 Android unit tests and 164 server tests. CI runs the Android build and tests, the release leak check and the server tests, and a separate workflow checks the installers on Linux, Windows and macOS. See `.github/workflows/` for the exact triggers.
 
 Conventions:
 
@@ -337,7 +346,13 @@ Before trusting a build, run the manual checklist in [`docs/DEVICE_TEST.md`](doc
 - [x] Gallery: timeline, viewer, video, albums, favourites, Bin
 - [x] Backup engine: discovery, pairing, resumable uploads, honest status and errors
 - [x] Multi-user storage node with quotas and invites
-- [x] One-command installer for Windows, macOS, Linux and Raspberry Pi ([`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md))
+- [x] One-command installer for Windows, macOS, Linux and Raspberry Pi ([`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md)); macOS install check still failing, fix pending
+- [ ] **In progress, not yet on `main`:**
+  - [ ] Truthful storage numbers: a per-node allocation (default 90% of free space) so the app shows what is really available instead of the default quota
+  - [ ] Clearer phone-app connection errors, address fallbacks and separate Wi-Fi/cellular switches
+  - [ ] Windows desktop app (small native window with status, pairing, users and storage), packaged as an installer
+  - [ ] Automatic start on boot for headless devices such as a Raspberry Pi
+  - [ ] Storage safety: detect an unplugged drive, grace period before deletes, database backups
 - [ ] Verify everything end to end on a real phone and a real Raspberry Pi Zero 2 W
 - [ ] Measured performance results against the targets in `docs/PERF.md`
 - [ ] Benchmark and baseline-profile modules
@@ -348,6 +363,8 @@ Before trusting a build, run the manual checklist in [`docs/DEVICE_TEST.md`](doc
 ## Known limitations
 
 - Not yet tested end to end on a real device and a real Raspberry Pi.
+- On `main`, the app can show the default per-user quota (100 GB) rather than the space actually free on the node's disk. A fix is in progress.
+- On Windows, the server must currently be started with `run.ps1` (or the installer's scheduled task); there is no desktop window yet.
 - Files on the node are not encrypted at rest.
 - Deduplication is per user: the same photo from two users is stored twice.
 - The node is meant for a trusted home network only.
