@@ -1301,3 +1301,8 @@ def launch_gui(data_dir: Optional[str | Path] = None, start_in_tray: bool = Fals
     app = PiPhotosApp(data_dir=data_dir, start_in_tray=start_in_tray)
     app.root.mainloop()
     return 0
+
+
+# Backward compatibility alias
+PiPhotosServerGUI = PiPhotosApp
+
