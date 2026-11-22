@@ -30,9 +30,11 @@ class UserRow:
     slug: str
     role: str  # owner | member | guest
     quota_bytes: int
-    status: str  # active | disabled
+    status: str  # active | disabled | pending_deletion
     created_at: str
     organise_by_date: bool = False
+    disabled_at: Optional[str] = None
+    scheduled_purge_at: Optional[str] = None
 
     @property
     def is_active(self) -> bool:
@@ -195,6 +197,8 @@ class Database:
                 ("slug", "TEXT"),
                 ("status", "TEXT NOT NULL DEFAULT 'active'"),
                 ("organise_by_date", "INTEGER NOT NULL DEFAULT 0"),
+                ("disabled_at", "TEXT"),
+                ("scheduled_purge_at", "TEXT"),
             ]:
                 try:
                     cur.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
@@ -311,6 +315,8 @@ class Database:
         slug = row["slug"] if "slug" in keys and row["slug"] else slugify(d_name)
         status = row["status"] if "status" in keys and row["status"] else ("active" if row["is_active"] else "disabled")
         organise = bool(row["organise_by_date"]) if "organise_by_date" in keys else False
+        disabled_at = row["disabled_at"] if "disabled_at" in keys else None
+        scheduled_purge_at = row["scheduled_purge_at"] if "scheduled_purge_at" in keys else None
         return UserRow(
             id=row["id"],
             name=d_name,
@@ -321,6 +327,8 @@ class Database:
             status=status,
             created_at=row["created_at"],
             organise_by_date=organise,
+            disabled_at=disabled_at,
+            scheduled_purge_at=scheduled_purge_at,
         )
 
     def create_user(
@@ -410,6 +418,42 @@ class Database:
             cur.execute(
                 f"UPDATE users SET {', '.join(parts)} WHERE id = ?", vals
             )
+
+    def schedule_user_deletion(self, user_id: str, grace_days: int = 7) -> Optional[UserRow]:
+        """Disable user immediately and schedule permanent deletion after grace_days."""
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        disabled_at = now.isoformat()
+        scheduled_purge_at = (now + timedelta(days=grace_days)).isoformat()
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE users SET status = 'pending_deletion', is_active = 0, disabled_at = ?, scheduled_purge_at = ? WHERE id = ?",
+                (disabled_at, scheduled_purge_at, user_id),
+            )
+            # Revoke all active tokens immediately so removed user cannot make calls
+            cur.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
+        return self.get_user(user_id)
+
+    def restore_user(self, user_id: str) -> Optional[UserRow]:
+        """Restore user from pending_deletion or disabled state back to active."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE users SET status = 'active', is_active = 1, disabled_at = NULL, scheduled_purge_at = NULL WHERE id = ?",
+                (user_id,),
+            )
+        return self.get_user(user_id)
+
+    def get_users_pending_purge(self, before_iso: Optional[str] = None) -> List[UserRow]:
+        """Return all users with pending deletion whose grace period has expired."""
+        if before_iso is None:
+            from datetime import datetime, timezone
+            before_iso = datetime.now(timezone.utc).isoformat()
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM users WHERE status = 'pending_deletion' AND scheduled_purge_at IS NOT NULL AND scheduled_purge_at <= ?",
+                (before_iso,),
+            )
+            return [self._row_to_user(r) for r in cur.fetchall()]
 
     def delete_user(self, user_id: str) -> None:
         with self._cursor() as cur:

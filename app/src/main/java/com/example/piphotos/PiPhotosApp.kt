@@ -6,6 +6,8 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
 import com.example.piphotos.media.ThumbnailLoader
+import com.example.piphotos.sync.MediaContentObserver
+import com.example.piphotos.sync.MediaSyncWorker
 
 class PiPhotosApp : Application(), ImageLoaderFactory {
 
@@ -25,6 +27,10 @@ class PiPhotosApp : Application(), ImageLoaderFactory {
                     .build()
             )
         }
+
+        // Improvement 4: MediaContentObserver registers for camera photo/video additions
+        MediaContentObserver.register(this)
+        MediaSyncWorker.scheduleMediaContentTrigger(this)
     }
 
     override fun onTrimMemory(level: Int) {

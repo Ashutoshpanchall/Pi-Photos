@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 data class SyncLedgerState(
@@ -63,6 +64,8 @@ class SyncRepository private constructor(
 
     private val _backedUpMediaIds = MutableStateFlow<Set<Long>>(emptySet())
     val backedUpMediaIds: StateFlow<Set<Long>> = _backedUpMediaIds.asStateFlow()
+
+    private val syncMutex = Mutex()
 
     private val _quotaState = MutableStateFlow(
         QuotaState(
@@ -139,12 +142,17 @@ class SyncRepository private constructor(
         isCancelled: () -> Boolean,
         onProgressUpdate: (current: Int, total: Int, name: String) -> Unit
     ): SyncOutcome = withContext(Dispatchers.IO) {
-        _syncState.value = _syncState.value.copy(
-            isSyncing = true,
-            lastError = null,
-            skippedCellularCount = 0,
-            skippedCellularExplanation = null
-        )
+        if (!syncMutex.tryLock()) {
+            Log.d("SyncRepository", "Sync already in progress; yielding concurrent execution.")
+            return@withContext SyncOutcome.Success(uploadedCount = 0, skippedCount = 0, skippedCellularCount = 0)
+        }
+        try {
+            _syncState.value = _syncState.value.copy(
+                isSyncing = true,
+                lastError = null,
+                skippedCellularCount = 0,
+                skippedCellularExplanation = null
+            )
 
         val initialQuota = refreshQuotaState()
         when (initialQuota.status) {
@@ -167,8 +175,7 @@ class SyncRepository private constructor(
             else -> { /* proceed with sync */ }
         }
 
-        try {
-            // 1. Gather monitored local media items
+        // 1. Gather monitored local media items
             val allLocalItems = LocalMediaIndex.getInstance(context).getAllItems()
             val filteredItems = filterMonitoredItems(allLocalItems)
 
@@ -485,6 +492,7 @@ class SyncRepository private constructor(
                 speedBytesPerSec = 0L,
                 etaSeconds = -1L
             )
+            syncMutex.unlock()
         }
     }
 

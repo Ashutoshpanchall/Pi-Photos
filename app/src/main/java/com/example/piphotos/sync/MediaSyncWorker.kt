@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -92,6 +93,7 @@ class MediaSyncWorker(
             }
         } finally {
             SyncNodePreferences.setSyncInProgress(applicationContext, false)
+            scheduleMediaContentTrigger(applicationContext)
         }
     }
 
@@ -141,6 +143,8 @@ class MediaSyncWorker(
         const val NOTIFICATION_CHANNEL_ID = "piphotos_backup"
         const val NOTIFICATION_ID = 4001
 
+        const val WORK_NAME_CONTENT_TRIGGER = "piphotos_media_content_trigger"
+
         const val KEY_RESULT_UPLOADED = "result_uploaded"
         const val KEY_RESULT_SKIPPED = "result_skipped"
         const val KEY_RESULT_SKIPPED_CELLULAR = "result_skipped_cellular"
@@ -162,6 +166,34 @@ class MediaSyncWorker(
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME_PERIODIC,
                 ExistingPeriodicWorkPolicy.UPDATE,
+                request
+            )
+            scheduleMediaContentTrigger(context)
+        }
+
+        fun scheduleMediaContentTrigger(context: Context) {
+            val paired = SyncNodePreferences.getPairedNode(context) ?: return
+            val allowCellular = BackupPreferences.isCellularPhotosAllowed(context) || BackupPreferences.isCellularVideosAllowed(context)
+            val chargingOnly = BackupPreferences.isChargingOnly(context)
+
+            val constraintsBuilder = Constraints.Builder()
+                .setRequiredNetworkType(if (allowCellular) NetworkType.CONNECTED else NetworkType.UNMETERED)
+                .setRequiresCharging(chargingOnly)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                constraintsBuilder.addContentUriTrigger(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true)
+                constraintsBuilder.addContentUriTrigger(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true)
+                constraintsBuilder.setTriggerContentUpdateDelay(5, TimeUnit.SECONDS)
+                constraintsBuilder.setTriggerContentMaxDelay(30, TimeUnit.SECONDS)
+            }
+
+            val request = OneTimeWorkRequestBuilder<MediaSyncWorker>()
+                .setConstraints(constraintsBuilder.build())
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                WORK_NAME_CONTENT_TRIGGER,
+                ExistingWorkPolicy.KEEP,
                 request
             )
         }
@@ -189,6 +221,7 @@ class MediaSyncWorker(
         fun cancelSync(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME_PERIODIC)
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME_IMMEDIATE)
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME_CONTENT_TRIGGER)
         }
     }
 }

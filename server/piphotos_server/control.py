@@ -515,16 +515,94 @@ class ServerController:
                     conn.commit()
             return {"status": "updated", "user_id": user_id}
 
-    def delete_user(self, user_id: str, delete_files: bool = False) -> Dict[str, Any]:
-        """Remove a user."""
+    def delete_user(
+        self,
+        user_id: str,
+        delete_files: bool = False,
+        delete_now: bool = False,
+        grace_days: int = 7,
+    ) -> Dict[str, Any]:
+        """Remove a user or schedule deletion with grace period (Improvement 5)."""
         if self.is_running():
             return self._http_request(
                 "DELETE",
                 f"/api/v1/admin/users/{user_id}",
-                params={"delete_files": str(delete_files).lower()},
+                params={
+                    "delete_files": str(delete_files).lower(),
+                    "delete_now": str(delete_now).lower(),
+                    "grace_days": str(grace_days),
+                },
             )
         else:
-            raise ControlError("Server must be running to remove users cleanly.", code="server_stopped")
+            if not self.paths.db_path.is_file():
+                raise ControlError("Database not found", status_code=404)
+            import sqlite3
+            from datetime import datetime, timezone, timedelta
+            conn = sqlite3.connect(str(self.paths.db_path))
+            try:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute("SELECT id, role, status FROM users WHERE id = ?", (user_id,))
+                u = cur.fetchone()
+                if not u:
+                    raise ControlError(f"User {user_id} not found", status_code=404)
+
+                if u["role"] == "owner" and u["status"] == "active":
+                    cur.execute("SELECT COUNT(*) FROM users WHERE role = 'owner' AND status = 'active'")
+                    if cur.fetchone()[0] <= 1:
+                        raise ControlError("Cannot delete the last active owner account.", status_code=400)
+
+                if not delete_now:
+                    now = datetime.now(timezone.utc)
+                    disabled_at = now.isoformat()
+                    scheduled_purge_at = (now + timedelta(days=grace_days)).isoformat()
+                    cur.execute(
+                        "UPDATE users SET status = 'pending_deletion', is_active = 0, disabled_at = ?, scheduled_purge_at = ? WHERE id = ?",
+                        (disabled_at, scheduled_purge_at, user_id),
+                    )
+                    cur.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
+                    conn.commit()
+                    return {
+                        "status": "pending_deletion",
+                        "user_id": user_id,
+                        "scheduled_purge_at": scheduled_purge_at,
+                        "grace_days": grace_days,
+                    }
+
+                # Immediate delete
+                cur.execute("DELETE FROM files WHERE user_id = ?", (user_id,))
+                cur.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
+                cur.execute("DELETE FROM devices WHERE user_id = ?", (user_id,))
+                cur.execute("DELETE FROM invites WHERE user_id = ?", (user_id,))
+                cur.execute("DELETE FROM partial_uploads WHERE user_id = ?", (user_id,))
+                cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                conn.commit()
+                return {"status": "deleted", "user_id": user_id, "files_deleted": delete_files}
+            finally:
+                conn.close()
+
+    def restore_user(self, user_id: str) -> Dict[str, Any]:
+        """Restore user from pending_deletion or disabled state back to active (Improvement 5)."""
+        if self.is_running():
+            return self._http_request("POST", f"/api/v1/admin/users/{user_id}/restore")
+        else:
+            if not self.paths.db_path.is_file():
+                raise ControlError("Database not found", status_code=404)
+            import sqlite3
+            conn = sqlite3.connect(str(self.paths.db_path))
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+                if not cur.fetchone():
+                    raise ControlError(f"User {user_id} not found", status_code=404)
+                cur.execute(
+                    "UPDATE users SET status = 'active', is_active = 1, disabled_at = NULL, scheduled_purge_at = NULL WHERE id = ?",
+                    (user_id,),
+                )
+                conn.commit()
+                return {"status": "restored", "user_id": user_id}
+            finally:
+                conn.close()
 
     def list_devices(self, user_id: str) -> List[Dict[str, Any]]:
         """List registered devices for a user."""

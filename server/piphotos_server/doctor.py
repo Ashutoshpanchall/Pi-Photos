@@ -49,6 +49,7 @@ class ServerDoctor:
         self.results = []
         self.check_python_version()
         self.check_data_directory()
+        self.check_storage_mount()
         self.check_disk_space()
         self.check_hard_links()
         self.check_certificates()
@@ -106,6 +107,32 @@ class ServerDoctor:
                 status="FAIL",
                 message=f"Cannot write to data directory: {e}",
                 fix_hint=f"Grant write permissions to current user for {self.paths.data_dir}",
+            ))
+
+    def check_storage_mount(self) -> None:
+        """Verify storage root directory exists and contains the .piphotos-storage marker."""
+        marker = self.paths.storage_dir / ".piphotos-storage"
+        if not self.paths.storage_dir.is_dir():
+            self.results.append(CheckResult(
+                name="storage_mount",
+                status="FAIL",
+                message=f"Storage directory does not exist or is unmounted: {self.paths.storage_dir}",
+                fix_hint="Ensure the external storage drive is connected and mounted at the configured path.",
+            ))
+            return
+
+        if not marker.is_file():
+            self.results.append(CheckResult(
+                name="storage_mount",
+                status="WARN",
+                message=f"Storage mount marker missing (.piphotos-storage not found in {self.paths.storage_dir})",
+                fix_hint="Drive may be unmounted. Connect drive or run 'piphotos-server setup' to initialize marker.",
+            ))
+        else:
+            self.results.append(CheckResult(
+                name="storage_mount",
+                status="PASS",
+                message=f"Storage drive mounted and verified: {self.paths.storage_dir}",
             ))
 
     def check_disk_space(self) -> None:

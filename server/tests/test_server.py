@@ -1159,7 +1159,7 @@ class TestUserManager:
         sha = hashlib.sha256(content).hexdigest()
         self.client.put(f"/api/v1/upload/{sha}", params={"device": p1["device_id"], "folder": "Camera", "name": "f.jpg"}, headers={**h1, "Content-Length": str(len(content))}, content=content)
 
-        del1 = self.client.delete(f"/api/v1/admin/users/{u1_id}?delete_files=false", headers=owner_headers)
+        del1 = self.client.delete(f"/api/v1/admin/users/{u1_id}?delete_files=false&delete_now=true", headers=owner_headers)
         assert del1.status_code == 200
 
         # Check archived in _removed/
@@ -1174,7 +1174,7 @@ class TestUserManager:
         h2 = {"Authorization": f"Bearer {p2['token']}"}
         self.client.put(f"/api/v1/upload/{sha}", params={"device": p2["device_id"], "folder": "Camera", "name": "f.jpg"}, headers={**h2, "Content-Length": str(len(content))}, content=content)
 
-        del2 = self.client.delete(f"/api/v1/admin/users/{u2_id}?delete_files=true", headers=owner_headers)
+        del2 = self.client.delete(f"/api/v1/admin/users/{u2_id}?delete_files=true&delete_now=true", headers=owner_headers)
         assert del2.status_code == 200
         assert not (storage.root / "users" / "purgeuser").exists()
 

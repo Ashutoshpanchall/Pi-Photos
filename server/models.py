@@ -43,6 +43,7 @@ class ServerInfo(BaseModel):
     version: str
     protocol_version: int = 1
     pairing_open: bool
+    storage_mounted: bool = True
 
 
 class PairResponse(BaseModel):
@@ -127,6 +128,8 @@ class AdminUserSummary(BaseModel):
     file_count: int
     devices_count: int
     last_seen_at: Optional[str] = None
+    disabled_at: Optional[str] = None
+    scheduled_purge_at: Optional[str] = None
 
 
 class CreateUserRequest(BaseModel):

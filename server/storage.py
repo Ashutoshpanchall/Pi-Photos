@@ -90,9 +90,29 @@ class StorageManager:
         <root>/users/<user-slug>/devices/<device-slug>/<folder>/YYYY/MM/<filename>
     """
 
-    def __init__(self, root: str | Path) -> None:
+    MOUNT_MARKER_FILENAME = ".piphotos-storage"
+
+    def __init__(self, root: str | Path, ensure_marker: bool = False) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
+        if ensure_marker:
+            self.ensure_mount_marker()
+
+    def ensure_mount_marker(self) -> None:
+        """Create the storage mount marker file to detect unmounted drives."""
+        marker = self._root / self.MOUNT_MARKER_FILENAME
+        if not marker.is_file():
+            try:
+                marker.write_text("PiPhotos storage root\n", encoding="utf-8")
+            except Exception:
+                pass
+
+    def is_mounted(self) -> bool:
+        """Return True if storage directory is mounted and accessible."""
+        if not self._root.is_dir():
+            return False
+        marker = self._root / self.MOUNT_MARKER_FILENAME
+        return marker.is_file()
 
     @property
     def root(self) -> Path:

@@ -324,6 +324,21 @@ async def lifespan(app: FastAPI):
         owner = db.create_user("Owner", "owner", 0)
         db.audit("system", "create_owner", owner.id, "Created initial owner user")
         logger.info("Created owner user: %s", owner.id)
+        if storage:
+            storage.ensure_mount_marker()
+
+    # Purge users whose grace period has expired (Improvement 5)
+    try:
+        expired_users = db.get_users_pending_purge()
+        for exp in expired_users:
+            logger.info("Purging user %s (%s) after grace period expired", exp.id, exp.slug)
+            db.delete_user(exp.id)
+            try:
+                storage.archive_user_dir(exp.slug)
+            except Exception as e:
+                logger.warning("Could not archive files for expired user %s: %s", exp.id, e)
+    except Exception as e:
+        logger.warning("Error running expired user purge check: %s", e)
 
     # mDNS advertisement via AsyncZeroconf
     advertiser = None
@@ -445,6 +460,7 @@ async def get_info() -> ServerInfo:
         version=SERVER_VERSION,
         protocol_version=PROTOCOL_VERSION,
         pairing_open=pairing.is_open,
+        storage_mounted=storage.is_mounted() if storage else False,
     )
 
 
@@ -461,6 +477,8 @@ def _user_to_admin_summary(u: UserRow) -> AdminUserSummary:
         file_count=db.user_file_count(u.id),
         devices_count=db.get_user_device_count(u.id),
         last_seen_at=db.get_user_last_seen(u.id),
+        disabled_at=u.disabled_at,
+        scheduled_purge_at=u.scheduled_purge_at,
     )
 
 
@@ -686,6 +704,16 @@ async def check_upload(
             "error": "bad_request", "message": "Invalid SHA-256 hash format",
         })
 
+    # Storage mount guard: reject uploads if storage drive is unmounted
+    if storage and not storage.is_mounted():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "storage_offline",
+                "message": "Storage volume is unmounted or disconnected. Refusing uploads to protect host storage.",
+            },
+        )
+
     # Check if file already exists for this user
     if db.file_exists_for_user(identity.user_id, sha256):
         return Response(status_code=200)
@@ -722,6 +750,16 @@ async def upload_file(
         raise HTTPException(status_code=400, detail={
             "error": "bad_request", "message": "Invalid SHA-256 hash format",
         })
+
+    # Storage mount guard: reject uploads if storage drive is unmounted
+    if storage and not storage.is_mounted():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "storage_offline",
+                "message": "Storage volume is unmounted or disconnected. Refusing uploads to protect host storage.",
+            },
+        )
 
     # Validate folder and name for path traversal
     if ".." in folder or "/" in folder or "\\" in folder:
@@ -1232,7 +1270,7 @@ async def update_admin_user(
     # Check last active owner guard
     active_owners = db.count_active_owners()
     if target.role == "owner" and target.status == "active" and active_owners <= 1:
-        if req.status == "disabled":
+        if req.status in ("disabled", "pending_deletion"):
             raise HTTPException(status_code=400, detail={
                 "error": "last_owner_protected",
                 "message": "Cannot disable the last active owner",
@@ -1280,8 +1318,8 @@ async def reissue_admin_user_invite(
     target = db.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
-    if target.status == "disabled":
-        raise HTTPException(status_code=400, detail={"error": "user_disabled", "message": "Cannot issue invite for disabled user"})
+    if not target.is_active or target.status in ("disabled", "pending_deletion"):
+        raise HTTPException(status_code=400, detail={"error": "user_disabled", "message": "Cannot issue invite for disabled or pending deletion user"})
 
     # Invalidate existing unused invites
     db.invalidate_user_invites(user_id)
@@ -1311,9 +1349,11 @@ async def delete_admin_user(
     user_id: str,
     request: Request,
     delete_files: bool = Query(False),
+    delete_now: bool = Query(False),
+    grace_days: int = Query(7),
     authorization: Optional[str] = Header(None),
 ) -> dict:
-    _require_owner(authorization, request=request)
+    identity = _require_owner(authorization, request=request)
     target = db.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
@@ -1326,6 +1366,18 @@ async def delete_admin_user(
         })
 
     user_slug = target.slug
+
+    # Improvement 5: 7-day grace period unless delete_now=True
+    if not delete_now:
+        updated = db.schedule_user_deletion(user_id, grace_days=grace_days)
+        db.audit(identity.user_id, "schedule_deletion", user_id, f"User scheduled for deletion in {grace_days} days")
+        return {
+            "status": "pending_deletion",
+            "user_id": user_id,
+            "scheduled_purge_at": updated.scheduled_purge_at if updated else None,
+            "grace_days": grace_days,
+            "message": f"User disabled and scheduled for deletion in {grace_days} days. Owner can cancel during the wait.",
+        }
 
     # 1. DB delete first in transaction
     db.delete_user(user_id)
@@ -1345,6 +1397,31 @@ async def delete_admin_user(
     if file_warning:
         res["file_warning"] = file_warning
     return res
+
+
+@app.post("/api/v1/admin/users/{user_id}/restore")
+async def restore_admin_user(
+    user_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    identity = _require_owner(authorization, request=request)
+    target = db.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
+
+    restored = db.restore_user(user_id)
+    db.audit(identity.user_id, "restore_user", user_id, "User account restored from pending deletion")
+    return {
+        "status": "restored",
+        "user_id": user_id,
+        "user": {
+            "id": restored.id,
+            "name": restored.name,
+            "status": restored.status,
+            "role": restored.role,
+        } if restored else None,
+    }
 
 
 @app.get("/api/v1/admin/users/{user_id}/devices")

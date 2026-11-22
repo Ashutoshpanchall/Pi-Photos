@@ -2,6 +2,7 @@
 Description=PiPhotos Storage Node
 After=network.target
 Wants=network-online.target
+RequiresMountsFor=/mnt/storage/piphotos
 
 [Service]
 Type=simple

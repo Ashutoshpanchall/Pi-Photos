@@ -624,6 +624,7 @@ class BackupFragment : Fragment() {
             .setNegativeButton("Disconnect") { dialog, _ ->
                 SyncNodePreferences.clearPairedNode(context)
                 MediaSyncWorker.cancelSync(context)
+                com.example.piphotos.sync.MediaContentObserver.unregister(context)
                 updateBackupUiState()
                 Toast.makeText(context, "Storage node disconnected", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()

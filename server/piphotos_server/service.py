@@ -33,6 +33,7 @@ def render_systemd_service(
         "Description=PiPhotos Storage Node",
         "After=network.target",
         "Wants=network-online.target",
+        f"RequiresMountsFor={paths.storage_dir}",
         "",
         "[Service]",
         "Type=simple",

@@ -151,6 +151,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
     with open(paths.config_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
 
+    # 1b. Storage mount marker initialization (Improvement 5 / Mount Guard)
+    from storage import StorageManager
+    storage_mgr = StorageManager(paths.storage_dir)
+    storage_mgr.ensure_mount_marker()
+
     # 2. TLS Certificates
     regen = getattr(args, "regen_cert", False)
     if regen:
