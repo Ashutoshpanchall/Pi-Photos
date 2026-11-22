@@ -58,6 +58,74 @@ def _print_qr(port: int, fingerprint: str, code: str) -> None:
         pass
 
 
+def parse_size_to_bytes(size_str: str) -> int:
+    """Parse human readable size string (e.g. 79GB, 500MB, 1.5TB, 1048576) into integer bytes."""
+    s = size_str.strip().upper()
+    units = {
+        "TB": 1024**4,
+        "T": 1024**4,
+        "GB": 1024**3,
+        "G": 1024**3,
+        "MB": 1024**2,
+        "M": 1024**2,
+        "KB": 1024,
+        "K": 1024,
+        "B": 1,
+    }
+    for unit, factor in sorted(units.items(), key=lambda x: -len(x[0])):
+        if s.endswith(unit):
+            val_str = s[:-len(unit)].strip()
+            return int(float(val_str) * factor)
+    return int(float(s))
+
+
+def cmd_set_capacity(args: argparse.Namespace) -> int:
+    """Set the node storage allocation capacity."""
+    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
+    paths.ensure_dirs()
+    cfg = {}
+    if paths.config_path.is_file():
+        try:
+            with open(paths.config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+
+    import shutil
+    try:
+        disk_usage = shutil.disk_usage(paths.storage_dir)
+    except Exception:
+        disk_usage = shutil._ntuple_diskusage(100 * 1024**3, 10 * 1024**3, 90 * 1024**3)
+
+    if args.size.strip().lower() in ("all", "default"):
+        target_bytes = int(disk_usage.free * 0.90)
+    else:
+        try:
+            target_bytes = parse_size_to_bytes(args.size)
+        except Exception as e:
+            print(f"Error: Invalid size format '{args.size}': {e}")
+            return 1
+
+    from database import Database
+    db = Database(paths.db_path)
+    used_bytes = db.total_storage_used()
+
+    if target_bytes < used_bytes and not args.force:
+        print(f"Error: Requested capacity ({target_bytes / (1024**3):.2f} GB) is below current storage usage ({used_bytes / (1024**3):.2f} GB).")
+        print("Use --force to override this check.")
+        return 1
+
+    if target_bytes > disk_usage.free:
+        print(f"Warning: Requested capacity ({target_bytes / (1024**3):.2f} GB) exceeds available free space on drive ({disk_usage.free / (1024**3):.2f} GB).")
+
+    cfg["node_allocation_bytes"] = target_bytes
+    with open(paths.config_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+    print(f"Node allocation capacity set to {target_bytes / (1024**3):.2f} GB ({target_bytes} bytes).")
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     """Print package version."""
     print(f"piphotos-server {VERSION}")
@@ -87,8 +155,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
     cfg["storage"] = storage_path
     cfg["database"] = str(paths.db_path)
     cfg["certs"] = str(paths.certs_dir)
+    import shutil
+    try:
+        usage = shutil.disk_usage(paths.storage_dir)
+        default_alloc = int(usage.free * 0.90)
+    except Exception:
+        default_alloc = 100 * 1024 * 1024 * 1024
+
+    if "node_allocation_bytes" not in cfg:
+        cfg["node_allocation_bytes"] = default_alloc
     if "default_quota" not in cfg:
-        cfg["default_quota"] = 100 * 1024 * 1024 * 1024  # 100 GB
+        cfg["default_quota"] = 50 * 1024 * 1024 * 1024  # 50 GB preset for invited members
 
     with open(paths.config_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
@@ -108,7 +185,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     db = Database(paths.db_path)
     users = db.list_users()
     if not users:
-        owner = db.create_user("Owner", "owner", cfg["default_quota"])
+        # Owner quota defaults to 0 (unlimited inside node allocation)
+        owner = db.create_user("Owner", "owner", 0)
         db.audit("system", "setup", owner.id, "Initialized owner user during setup")
 
     # 4. Local admin token
@@ -586,6 +664,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--json", action="store_true", help="Output diagnostics report in JSON format")
     p_doctor.add_argument("--data-dir", type=str, default=None, help="Data directory")
 
+    # set-capacity
+    p_cap = subparsers.add_parser("set-capacity", help="Set node storage allocation capacity")
+    p_cap.add_argument("size", help="Capacity (e.g. 79GB, 200GB, 1.5TB, all)")
+    p_cap.add_argument("--force", action="store_true", help="Force setting capacity below current usage")
+    p_cap.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
     # version
     subparsers.add_parser("version", help="Show server software version")
 
@@ -617,6 +701,7 @@ def main(args: Optional[list[str]] = None) -> int:
         "update": cmd_update,
         "uninstall": cmd_uninstall,
         "doctor": cmd_doctor,
+        "set-capacity": cmd_set_capacity,
     }
 
     handler = handlers.get(parsed.subcommand)

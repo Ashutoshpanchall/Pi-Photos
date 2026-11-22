@@ -533,6 +533,14 @@ class Database:
             )
             return cur.fetchone() is not None
 
+    def file_exists_at_path(self, user_id: str, device_id: str, folder: str, relative_path: str) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM files WHERE user_id = ? AND device_id = ? AND folder = ? AND relative_path = ? LIMIT 1",
+                (user_id, device_id, folder, relative_path),
+            )
+            return cur.fetchone() is not None
+
     def get_first_file_by_hash(self, user_id: str, sha256: str) -> Optional[FileRow]:
         with self._cursor() as cur:
             cur.execute(
@@ -621,6 +629,15 @@ class Database:
             fid = cur.lastrowid
         return FileRow(fid, user_id, device_id, folder, relative_path,
                         sha256, size, date_taken, now)
+
+    def total_storage_used(self) -> int:
+        """Returns total physical bytes stored across all users (deduplicated by sha256)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(size), 0) FROM "
+                "(SELECT sha256, MAX(size) AS size FROM files GROUP BY sha256)"
+            )
+            return cur.fetchone()[0]
 
     def user_storage_used(self, user_id: str) -> int:
         """Returns total bytes stored by this user (deduplicated by sha256)."""

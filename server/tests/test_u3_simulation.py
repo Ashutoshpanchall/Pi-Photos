@@ -96,7 +96,7 @@ class TestU3Simulation:
             },
             content=payload_7_5mb,
         )
-        assert up1.status_code == 200
+        assert up1.status_code in (200, 201)
 
         st = self.client.get("/api/v1/status", headers=member_headers).json()
         assert st["user"]["used_bytes"] == len(payload_7_5mb)
@@ -120,7 +120,7 @@ class TestU3Simulation:
             },
             content=payload_1mb,
         )
-        assert up2.status_code == 200
+        assert up2.status_code in (200, 201)
 
         st = self.client.get("/api/v1/status", headers=member_headers).json()
         assert st["user"]["soft_quota_warning"] == "80%"
@@ -143,7 +143,7 @@ class TestU3Simulation:
             },
             content=payload_0_6mb,
         )
-        assert up3.status_code == 200
+        assert up3.status_code in (200, 201)
 
         st = self.client.get("/api/v1/status", headers=member_headers).json()
         assert st["user"]["soft_quota_warning"] == "90%"
@@ -201,7 +201,7 @@ class TestU3Simulation:
             },
             content=payload_1_5mb,
         )
-        assert up4_resumed.status_code == 200
+        assert up4_resumed.status_code in (200, 201)
 
         # Verify all 4 files are listed under member
         files = self.client.get("/api/v1/files", headers=member_headers).json()

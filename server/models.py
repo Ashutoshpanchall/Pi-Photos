@@ -26,7 +26,7 @@ class UserRole(str, Enum):
 class PairRequest(BaseModel):
     code: str = Field(..., min_length=6, max_length=8)
     device_name: str = Field(..., min_length=1, max_length=200)
-    device_model: str = Field(..., min_length=1, max_length=200)
+    device_model: str = Field(default="Generic Device", max_length=200)
 
 
 class CheckUploadRequest(BaseModel):
@@ -65,6 +65,9 @@ class UserQuota(BaseModel):
     file_count: int
     soft_quota_warning: Optional[str] = None
     organise_by_date: bool = False
+    available_bytes: int = 0
+    allocation_bytes: int = 0
+    allocation_used_bytes: int = 0
 
 
 class StatusResponse(BaseModel):
@@ -73,6 +76,8 @@ class StatusResponse(BaseModel):
 
 
 class UploadResult(BaseModel):
+    status: str = "created"
+    file_id: int
     sha256: str
     size: int
     path: str
@@ -152,6 +157,9 @@ class MeResponse(BaseModel):
     used_bytes: int
     device_id: str
     device_name: str
+    available_bytes: int = 0
+    allocation_bytes: int = 0
+    allocation_used_bytes: int = 0
 
 
 class FileInfo(BaseModel):
@@ -197,4 +205,19 @@ class AdminOverviewResponse(BaseModel):
     disk: DiskInfo
     allocated_quota_total: int
     over_allocated: bool
+    allocation_bytes: int = 0
+    allocation_used_bytes: int = 0
     users: list[UserOverview]
+
+
+class SetAllocationRequest(BaseModel):
+    allocation_bytes: int
+    force: bool = False
+
+
+class AllocationResponse(BaseModel):
+    allocation_bytes: int
+    used_bytes: int
+    drive_free_bytes: int
+    drive_total_bytes: int
+    warning: Optional[str] = None

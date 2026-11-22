@@ -771,7 +771,7 @@ class TestAPI:
             headers={**headers, "Upload-Offset": str(half_len), "Content-Length": str(len(full_content))},
             content=full_content[half_len:],
         )
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code in (200, 201), resp.text
         res = resp.json()
         assert res["sha256"] == sha
         assert res["size"] == len(full_content)
@@ -799,7 +799,7 @@ class TestAPI:
             headers={**headers, "Content-Length": str(len(content))},
             content=content,
         )
-        assert resp1.status_code == 200
+        assert resp1.status_code in (200, 201)
 
         # Second upload into Screenshots (same sha)
         resp2 = self.client.put(
@@ -848,7 +848,7 @@ class TestAPI:
             headers={**headers, "Content-Length": str(len(content))},
             content=content,
         )
-        assert resp.status_code == 200
+        assert resp.status_code in (200, 201)
 
         # Check file exists in 2026/01 and mtime matches
         target_path = storage.root / "users" / slugify(user.name) / "devices" / "phone" / "Camera" / "2026" / "01" / "img.jpg"
@@ -927,7 +927,7 @@ class TestUserManager:
             headers={**bob_headers, "Content-Length": str(len(content))},
             content=content,
         )
-        assert up_resp.status_code == 200, up_resp.text
+        assert up_resp.status_code in (200, 201), up_resp.text
 
         # 4. Check user list shows Bob with used_bytes and 1 device
         users_resp = self.client.get("/api/v1/admin/users", headers=owner_headers)
@@ -1009,7 +1009,7 @@ class TestUserManager:
             headers={**headers, "Content-Length": "85"},
             content=content85,
         )
-        assert r85.status_code == 200
+        assert r85.status_code in (200, 201)
         st85 = self.client.get("/api/v1/status", headers=headers).json()
         assert st85["user"]["soft_quota_warning"] == "80%"
 
@@ -1215,7 +1215,7 @@ class TestUserManager:
             headers={**owner_headers, "Content-Length": str(len(content))},
             content=content,
         )
-        assert r1.status_code == 200
+        assert r1.status_code in (200, 201)
 
         # Upload duplicate into Downloads
         r2 = self.client.put(
@@ -1413,7 +1413,7 @@ class TestUserManager:
             headers={**alice_headers, "Content-Length": str(len(payload))},
             content=payload,
         )
-        assert up.status_code == 200
+        assert up.status_code in (200, 201)
 
         # Alice lists files
         files_resp = self.client.get("/api/v1/files", headers=alice_headers)
@@ -1505,7 +1505,7 @@ class TestHardening:
             assert r.json() == []
 
     def test_valid_upload_still_works(self):
-        assert self._put(b"hello photo", "Camera").status_code == 200
+        assert self._put(b"hello photo", "Camera").status_code in (200, 201)
 
     def test_disk_reserve_breach_uses_disk_full_code(self):
         # Reserve 100% of the disk so any upload would breach it.

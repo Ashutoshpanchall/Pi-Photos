@@ -58,6 +58,8 @@ from models import (
     UserQuota,
     UserRole,
     AdminUserSummary,
+    SetAllocationRequest,
+    AllocationResponse,
     CreateUserRequest,
     CreateUserResponse,
     UpdateUserRequest,
@@ -90,6 +92,23 @@ DEFAULT_QUOTA_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
 
 def get_disk_reserve_fraction() -> float:
     return float(os.environ.get("PIPHOTOS_DISK_RESERVE_FRACTION", "0.10"))
+
+
+def get_node_allocation_bytes() -> int:
+    """Returns node allocation capacity in bytes.
+    If not explicitly configured, defaults to 90% of free storage space.
+    """
+    env_alloc = os.environ.get("PIPHOTOS_NODE_ALLOCATION_BYTES")
+    if env_alloc:
+        return int(env_alloc)
+    cfg = _config()
+    if "node_allocation_bytes" in cfg and cfg["node_allocation_bytes"] is not None:
+        return int(cfg["node_allocation_bytes"])
+    try:
+        usage = shutil.disk_usage(storage.root if "storage" in globals() and storage else ".")
+        return int(usage.free * 0.90)
+    except Exception:
+        return 100 * 1024 * 1024 * 1024
 
 
 def _config() -> dict:
@@ -125,6 +144,7 @@ def _config() -> dict:
         "cert_dir": os.environ.get("PIPHOTOS_CERTS", cfg.get("certs", default_certs)),
         "default_quota": int(os.environ.get(
             "PIPHOTOS_DEFAULT_QUOTA", cfg.get("default_quota", str(DEFAULT_QUOTA_BYTES)))),
+        "node_allocation_bytes": cfg.get("node_allocation_bytes"),
     }
 
 
@@ -298,10 +318,10 @@ async def lifespan(app: FastAPI):
     pairing = PairingManager()
     code = pairing.generate_code()
 
-    # Ensure owner user exists
+    # Ensure owner user exists (quota=0 means unlimited, bound by node allocation)
     users = db.list_users()
     if not users:
-        owner = db.create_user("Owner", "owner", config["default_quota"])
+        owner = db.create_user("Owner", "owner", 0)
         db.audit("system", "create_owner", owner.id, "Created initial owner user")
         logger.info("Created owner user: %s", owner.id)
 
@@ -586,13 +606,19 @@ async def get_status(authorization: Optional[str] = Header(None)) -> StatusRespo
     used = db.user_storage_used(identity.user_id)
     file_count = db.user_file_count(identity.user_id)
 
+    node_alloc = get_node_allocation_bytes()
+    node_used = db.total_storage_used()
+    alloc_left = max(0, node_alloc - node_used)
+    disk_left = max(0, disk_usage.free - reserved)
+
     if user.quota_bytes > 0:
-        free = max(0, user.quota_bytes - used)
+        quota_left = max(0, user.quota_bytes - used)
+        available = min(quota_left, alloc_left, disk_left)
         usage_pct = (used / user.quota_bytes * 100)
     else:
-        # Unlimited quota bound by disk space
-        free = max(0, disk_usage.free - reserved)
-        usage_pct = 0
+        # Unlimited quota bound by node allocation and disk space
+        available = min(alloc_left, disk_left)
+        usage_pct = (used / node_alloc * 100) if node_alloc > 0 else 0
 
     # Soft quota warnings
     warning = None
@@ -612,10 +638,13 @@ async def get_status(authorization: Optional[str] = Header(None)) -> StatusRespo
             user_id=identity.user_id,
             quota_bytes=user.quota_bytes,
             used_bytes=used,
-            free_bytes=free,
+            free_bytes=available,
             file_count=file_count,
             soft_quota_warning=warning,
             organise_by_date=user.organise_by_date,
+            available_bytes=available,
+            allocation_bytes=node_alloc,
+            allocation_used_bytes=node_used,
         ),
     )
 
@@ -674,7 +703,7 @@ async def check_upload(
     return Response(status_code=404)
 
 
-@app.put("/api/v1/upload/{sha256}")
+@app.put("/api/v1/upload/{sha256}", response_model=UploadResult, status_code=201)
 async def upload_file(
     sha256: str,
     request: Request,
@@ -685,7 +714,7 @@ async def upload_file(
     authorization: Optional[str] = Header(None),
     upload_offset: int = Header(0, alias="Upload-Offset"),
     content_length: int = Header(0, alias="Content-Length"),
-) -> UploadResult:
+) -> Response:
     identity = _require_auth(authorization)
 
     # Validate SHA-256 format
@@ -717,9 +746,10 @@ async def upload_file(
     user_slug = user.slug
 
     # Check if this content is already stored for this user (deduplication)
-    # If so, create a real file via os.link() (or fallback copy/db_only) and record in DB
+    # Improvement 1: Discard new copy and answer 200 with status: duplicate and existing file id
     existing_file = db.get_first_file_by_hash(identity.user_id, sha256)
     if existing_file:
+        logger.info("Duplicate upload for sha %s, returning existing file_id %s", sha256, existing_file.id)
         existing_dev = db.get_device(existing_file.device_id)
         existing_dir = storage.folder_dir(
             user_slug, existing_dev.slug if existing_dev else "unknown", existing_file.folder,
@@ -737,34 +767,36 @@ async def upload_file(
         resolved_name = storage.resolve_filename(target_dir, name, sha256)
         target_path = target_dir / resolved_name
 
-        link_method = "none"
-        if existing_path.exists() and not target_path.exists():
+        if target_path != existing_path and not target_path.exists():
             try:
                 os.link(str(existing_path), str(target_path))
-                link_method = "hardlink"
-            except Exception:
+            except OSError:
                 try:
                     shutil.copy2(str(existing_path), str(target_path))
-                    link_method = "copy"
                 except Exception:
-                    link_method = "db_only"
-        elif target_path.exists():
-            link_method = "existing"
+                    pass
 
-        if target_path.exists() and taken:
-            storage.set_mtime(target_path, taken)
+            if not db.file_exists_at_path(identity.user_id, device, folder, resolved_name):
+                db.insert_file(
+                    user_id=identity.user_id,
+                    device_id=device,
+                    folder=folder,
+                    relative_path=resolved_name,
+                    sha256=sha256,
+                    size=existing_file.size,
+                    date_taken=taken or existing_file.date_taken,
+                )
 
-        db.insert_file(
-            user_id=identity.user_id,
-            device_id=device,
-            folder=folder,
-            relative_path=resolved_name,
-            sha256=sha256,
-            size=existing_file.size,
-            date_taken=taken,
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "duplicate",
+                "file_id": existing_file.id,
+                "sha256": sha256,
+                "size": existing_file.size,
+                "path": f"{folder}/{resolved_name}",
+            },
         )
-        logger.info("Duplicate upload for sha %s resolved via %s", sha256, link_method)
-        return UploadResult(sha256=sha256, size=existing_file.size, path=f"{folder}/{resolved_name}")
 
     # Concurrency control: reject concurrent upload of the same hash for this user
     upload_key = (identity.user_id, sha256)
@@ -785,6 +817,14 @@ async def upload_file(
                 raise HTTPException(status_code=507, detail={
                     "error": "quota_exceeded",
                     "message": f"Upload would exceed your storage quota ({user.quota_bytes // (1024**3)} GB)",
+                })
+
+            node_alloc = get_node_allocation_bytes()
+            node_used = db.total_storage_used()
+            if final_size > 0 and node_used + final_size > node_alloc:
+                raise HTTPException(status_code=507, detail={
+                    "error": "allocation_full",
+                    "message": f"Upload would exceed node storage allocation ({node_alloc // (1024**3)} GB)",
                 })
 
             disk_usage = shutil.disk_usage(storage.root)
@@ -846,6 +886,13 @@ async def upload_file(
                             "message": f"Upload exceeded user storage quota ({user.quota_bytes // (1024**3)} GB)",
                         })
 
+                    # Dynamic allocation enforcement while streaming
+                    if node_used + total_bytes + chunk_len > node_alloc:
+                        raise HTTPException(status_code=507, detail={
+                            "error": "allocation_full",
+                            "message": f"Upload exceeded node storage allocation ({node_alloc // (1024**3)} GB)",
+                        })
+
                     # Dynamic disk reserve enforcement while streaming
                     bytes_written_this_request += chunk_len
                     if (disk_usage.free - bytes_written_this_request) < reserved:
@@ -892,7 +939,7 @@ async def upload_file(
             await run_in_threadpool(storage.set_mtime, target_path, taken)
 
             # Record in database
-            db.insert_file(
+            new_file = db.insert_file(
                 user_id=identity.user_id,
                 device_id=device,
                 folder=folder,
@@ -905,10 +952,15 @@ async def upload_file(
             # Clean partial upload record
             db.delete_partial_upload(identity.user_id, sha256)
 
-            return UploadResult(
-                sha256=sha256,
-                size=total_bytes,
-                path=f"{folder}/{resolved_name}",
+            return JSONResponse(
+                status_code=201,
+                content={
+                    "status": "created",
+                    "file_id": new_file.id,
+                    "sha256": sha256,
+                    "size": total_bytes,
+                    "path": f"{folder}/{resolved_name}",
+                },
             )
 
     finally:
@@ -955,6 +1007,19 @@ async def get_me(authorization: Optional[str] = Header(None)) -> MeResponse:
     dev = db.get_device(identity.device_id)
     used = db.user_storage_used(identity.user_id)
 
+    disk_usage = shutil.disk_usage(storage.root)
+    reserved = int(disk_usage.total * get_disk_reserve_fraction())
+    node_alloc = get_node_allocation_bytes()
+    node_used = db.total_storage_used()
+    alloc_left = max(0, node_alloc - node_used)
+    disk_left = max(0, disk_usage.free - reserved)
+
+    if user.quota_bytes > 0:
+        quota_left = max(0, user.quota_bytes - used)
+        available = min(quota_left, alloc_left, disk_left)
+    else:
+        available = min(alloc_left, disk_left)
+
     return MeResponse(
         user_id=user.id,
         display_name=user.display_name or user.name,
@@ -963,6 +1028,9 @@ async def get_me(authorization: Optional[str] = Header(None)) -> MeResponse:
         used_bytes=used,
         device_id=dev.id if dev else "",
         device_name=dev.name if dev else "",
+        available_bytes=available,
+        allocation_bytes=node_alloc,
+        allocation_used_bytes=node_used,
     )
 
 
@@ -1329,9 +1397,11 @@ async def get_admin_overview(
     disk_usage = shutil.disk_usage(storage.root)
     reserved = int(disk_usage.total * get_disk_reserve_fraction())
 
+    node_alloc = get_node_allocation_bytes()
+    node_used = db.total_storage_used()
     users = db.list_users()
     allocated = db.get_allocated_quota_total()
-    over_allocated = allocated > disk_usage.total
+    over_allocated = allocated > node_alloc
 
     user_overviews = [
         UserOverview(
@@ -1353,7 +1423,51 @@ async def get_admin_overview(
         ),
         allocated_quota_total=allocated,
         over_allocated=over_allocated,
+        allocation_bytes=node_alloc,
+        allocation_used_bytes=node_used,
         users=user_overviews,
+    )
+
+
+@app.post("/api/v1/admin/storage/allocation")
+async def set_storage_allocation(
+    req: SetAllocationRequest,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> AllocationResponse:
+    _require_owner(authorization, request=request)
+    disk_usage = shutil.disk_usage(storage.root)
+    used_bytes = db.total_storage_used()
+
+    if req.allocation_bytes < used_bytes and not req.force:
+        raise HTTPException(status_code=400, detail={
+            "error": "below_usage",
+            "message": f"Requested allocation ({req.allocation_bytes} bytes) is below current storage usage ({used_bytes} bytes).",
+            "used_bytes": used_bytes,
+        })
+
+    warning = None
+    if req.allocation_bytes > disk_usage.free:
+        warning = f"Requested allocation ({req.allocation_bytes / (1024**3):.2f} GB) exceeds available free space on drive ({disk_usage.free / (1024**3):.2f} GB)."
+
+    config_path = Path(os.environ.get("PIPHOTOS_CONFIG", "config.json"))
+    cfg = {}
+    if config_path.is_file():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+    cfg["node_allocation_bytes"] = req.allocation_bytes
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+    return AllocationResponse(
+        allocation_bytes=req.allocation_bytes,
+        used_bytes=used_bytes,
+        drive_free_bytes=disk_usage.free,
+        drive_total_bytes=disk_usage.total,
+        warning=warning,
     )
 
 

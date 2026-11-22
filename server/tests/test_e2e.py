@@ -242,7 +242,7 @@ def test_e2e_real_server_50mb_upload_resume():
 
         resp2 = conn2.getresponse()
         resp2_body = resp2.read().decode()
-        assert resp2.status == 200, f"Resume failed with status {resp2.status}: {resp2_body}"
+        assert resp2.status in (200, 201), f"Resume failed with status {resp2.status}: {resp2_body}"
         print(f"[E2E] Resume PUT completed: status={resp2.status}, body={resp2_body}", flush=True)
 
         # 9. Verify completed state
