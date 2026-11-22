@@ -1149,9 +1149,10 @@ async def get_file_content(
 
 @app.get("/api/v1/admin/users")
 async def list_admin_users(
+    request: Request,
     authorization: Optional[str] = Header(None),
 ) -> list[AdminUserSummary]:
-    _require_owner(authorization)
+    _require_owner(authorization, request=request)
     users = db.list_users()
     return [_user_to_admin_summary(u) for u in users]
 
@@ -1159,9 +1160,10 @@ async def list_admin_users(
 @app.post("/api/v1/admin/users")
 async def create_admin_user(
     req: CreateUserRequest,
+    request: Request,
     authorization: Optional[str] = Header(None),
 ) -> CreateUserResponse:
-    identity = _require_owner(authorization)
+    identity = _require_owner(authorization, request=request)
     display_name = req.display_name.strip()
     if not display_name:
         raise HTTPException(status_code=400, detail={
@@ -1218,10 +1220,11 @@ async def create_admin_user(
 async def update_admin_user(
     user_id: str,
     req: UpdateUserRequest,
+    request: Request,
     force: bool = Query(False),
     authorization: Optional[str] = Header(None),
 ) -> AdminUserSummary:
-    _require_owner(authorization)
+    _require_owner(authorization, request=request)
     target = db.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
@@ -1270,9 +1273,10 @@ async def update_admin_user(
 @app.post("/api/v1/admin/users/{user_id}/invite")
 async def reissue_admin_user_invite(
     user_id: str,
+    request: Request,
     authorization: Optional[str] = Header(None),
 ) -> InviteResponse:
-    identity = _require_owner(authorization)
+    identity = _require_owner(authorization, request=request)
     target = db.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
@@ -1305,10 +1309,11 @@ async def reissue_admin_user_invite(
 @app.delete("/api/v1/admin/users/{user_id}")
 async def delete_admin_user(
     user_id: str,
+    request: Request,
     delete_files: bool = Query(False),
     authorization: Optional[str] = Header(None),
 ) -> dict:
-    _require_owner(authorization)
+    _require_owner(authorization, request=request)
     target = db.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
@@ -1345,9 +1350,10 @@ async def delete_admin_user(
 @app.get("/api/v1/admin/users/{user_id}/devices")
 async def list_admin_user_devices(
     user_id: str,
+    request: Request,
     authorization: Optional[str] = Header(None),
 ) -> list[DeviceSummary]:
-    _require_owner(authorization)
+    _require_owner(authorization, request=request)
     target = db.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
@@ -1368,9 +1374,10 @@ async def list_admin_user_devices(
 @app.delete("/api/v1/admin/devices/{device_id}")
 async def delete_admin_device(
     device_id: str,
+    request: Request,
     authorization: Optional[str] = Header(None),
 ) -> dict:
-    _require_owner(authorization)
+    _require_owner(authorization, request=request)
     dev = db.get_device(device_id)
     if dev is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Device not found"})

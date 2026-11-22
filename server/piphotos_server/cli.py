@@ -81,24 +81,12 @@ def parse_size_to_bytes(size_str: str) -> int:
 
 def cmd_set_capacity(args: argparse.Namespace) -> int:
     """Set the node storage allocation capacity."""
-    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
-    paths.ensure_dirs()
-    cfg = {}
-    if paths.config_path.is_file():
-        try:
-            with open(paths.config_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-        except Exception:
-            cfg = {}
-
-    import shutil
-    try:
-        disk_usage = shutil.disk_usage(paths.storage_dir)
-    except Exception:
-        disk_usage = shutil._ntuple_diskusage(100 * 1024**3, 10 * 1024**3, 90 * 1024**3)
+    from .control import ServerController, ControlError
+    ctrl = ServerController(data_dir=args.data_dir)
+    storage_info = ctrl.get_storage_summary()
 
     if args.size.strip().lower() in ("all", "default"):
-        target_bytes = int(disk_usage.free * 0.90)
+        target_bytes = int(storage_info["disk_free_bytes"] * 0.90)
     else:
         try:
             target_bytes = parse_size_to_bytes(args.size)
@@ -106,21 +94,14 @@ def cmd_set_capacity(args: argparse.Namespace) -> int:
             print(f"Error: Invalid size format '{args.size}': {e}")
             return 1
 
-    from database import Database
-    db = Database(paths.db_path)
-    used_bytes = db.total_storage_used()
-
-    if target_bytes < used_bytes and not args.force:
-        print(f"Error: Requested capacity ({target_bytes / (1024**3):.2f} GB) is below current storage usage ({used_bytes / (1024**3):.2f} GB).")
-        print("Use --force to override this check.")
+    try:
+        ctrl.set_storage_capacity(target_bytes, force=args.force)
+    except ControlError as e:
+        print(f"Error: {e.message}")
         return 1
 
-    if target_bytes > disk_usage.free:
-        print(f"Warning: Requested capacity ({target_bytes / (1024**3):.2f} GB) exceeds available free space on drive ({disk_usage.free / (1024**3):.2f} GB).")
-
-    cfg["node_allocation_bytes"] = target_bytes
-    with open(paths.config_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+    if target_bytes > storage_info["disk_free_bytes"]:
+        print(f"Warning: Requested capacity ({target_bytes / (1024**3):.2f} GB) exceeds available free space on drive ({storage_info['disk_free_bytes'] / (1024**3):.2f} GB).")
 
     print(f"Node allocation capacity set to {target_bytes / (1024**3):.2f} GB ({target_bytes} bytes).")
     return 0
@@ -276,51 +257,30 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_pair(args: argparse.Namespace) -> int:
     """Open pairing window via loopback local-admin token without restarting server."""
-    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
-    token = read_local_admin_token(paths.local_admin_token_path)
+    from .control import ServerController, ControlError
+    ctrl = ServerController(data_dir=args.data_dir)
+    token = ctrl.get_admin_token()
     if not token:
-        print(f"Error: Local admin token not found at {paths.local_admin_token_path}.")
+        print(f"Error: Local admin token not found at {ctrl.paths.local_admin_token_path}.")
         print("Ensure 'piphotos-server setup' has been run.")
         return 1
 
-    # Read port from config
-    port = 8443
-    if paths.config_path.is_file():
-        try:
-            with open(paths.config_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-                port = int(cfg.get("port", 8443))
-        except Exception:
-            pass
-
-    # Call POST /api/v1/admin/pairing/open on loopback
-    import httpx
-    url = f"https://127.0.0.1:{port}/api/v1/admin/pairing/open"
-    headers = {"Authorization": f"Bearer {token}"}
     try:
-        resp = httpx.post(url, headers=headers, verify=False, timeout=5.0)
-    except httpx.ConnectError:
-        print(f"Error: Could not connect to PiPhotos server on https://127.0.0.1:{port}.")
-        print("Is the server currently running? Start it with 'piphotos-server run' or 'piphotos-server start'.")
+        pair_info = ctrl.open_pairing(duration_minutes=10)
+    except ControlError as e:
+        print(f"Error: {e.message}")
+        if e.code in ("connection_refused", "server_stopped"):
+            print("Is the server currently running? Start it with 'piphotos-server run' or 'piphotos-server start'.")
         return 1
     except Exception as e:
         print(f"Error connecting to server: {e}")
         return 1
 
-    if resp.status_code != 200:
-        print(f"Error from server (HTTP {resp.status_code}): {resp.text}")
-        return 1
-
-    data = resp.json()
-    code = data.get("code")
-    expires = data.get("expires_in_seconds", 600)
-
-    fp = ""
-    if paths.cert_path.is_file():
-        fp = get_cert_fingerprint(paths.cert_path)
-
-    ips = get_local_ipv4_addresses()
-    primary_ip = ips[0] if ips else "127.0.0.1"
+    code = pair_info["code"]
+    expires = pair_info["expires_in_seconds"]
+    primary_ip = pair_info["host"]
+    port = pair_info["port"]
+    fp = pair_info["tls_fingerprint"]
 
     print("=" * 60)
     print("  PiPhotos Storage Node — Pairing Opened")
@@ -340,52 +300,34 @@ def cmd_pair(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     """Check running status, URL, users, and storage capacity."""
-    paths: ServerPaths = resolve_paths(data_dir=args.data_dir)
-    port = 8443
-    name = "Home Vault"
-    if paths.config_path.is_file():
-        try:
-            with open(paths.config_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-                port = int(cfg.get("port", 8443))
-                name = cfg.get("name", "Home Vault")
-        except Exception:
-            pass
+    from .control import ServerController
+    ctrl = ServerController(data_dir=args.data_dir)
+    status = ctrl.get_status()
 
-    import httpx
-    is_running = False
-    info_data = {}
-    try:
-        resp = httpx.get(f"https://127.0.0.1:{port}/api/v1/info", verify=False, timeout=3.0)
-        if resp.status_code == 200:
-            is_running = True
-            info_data = resp.json()
-    except Exception:
-        pass
+    is_running = status["running"]
+    name = status["name"]
+    port = status["port"]
+    storage = status["storage"]
+    disk_free_gb = storage["disk_free_bytes"] / (1024 ** 3)
+    disk_total_gb = storage["disk_total_bytes"] / (1024 ** 3)
 
-    # Disk usage
-    disk_free_gb = 0.0
-    disk_total_gb = 0.0
-    if paths.storage_dir.exists():
-        usage = shutil.disk_usage(paths.storage_dir)
-        disk_free_gb = usage.free / (1024 ** 3)
-        disk_total_gb = usage.total / (1024 ** 3)
-
-    ips = get_local_ipv4_addresses()
     print("=" * 60)
     print(f"  PiPhotos Storage Node Status — {name}")
     print("=" * 60)
     print(f"  Status:          {'RUNNING' if is_running else 'STOPPED'}")
-    print(f"  Version:         {info_data.get('version', VERSION)}")
-    print(f"  Data Directory:  {paths.data_dir}")
-    print(f"  Storage Root:    {paths.storage_dir}")
+    print(f"  Version:         {status.get('version', VERSION)}")
+    print(f"  Data Directory:  {status['data_dir']}")
+    print(f"  Storage Root:    {status['storage_dir']}")
     print(f"  Port:            {port}")
     print(f"  Disk Capacity:   {disk_free_gb:.1f} GB free of {disk_total_gb:.1f} GB")
+    alloc_gb = storage["allocation_bytes"] / (1024 ** 3)
+    used_gb = storage["allocation_used_bytes"] / (1024 ** 3)
+    print(f"  Node Allocation: {used_gb:.1f} GB of {alloc_gb:.1f} GB allocated")
 
     if is_running:
-        urls = [f"https://{ip}:{port}" for ip in ips] or [f"https://127.0.0.1:{port}"]
+        urls = status["lan_urls"] or [f"https://127.0.0.1:{port}"]
         print(f"  LAN URLs:        {', '.join(urls)}")
-        print(f"  Pairing Open:    {info_data.get('pairing_open', False)}")
+        print(f"  Pairing Open:    {status.get('pairing_open', False)}")
     else:
         print("  Hint:            Start the server with 'piphotos-server run' or the installed service.")
 
