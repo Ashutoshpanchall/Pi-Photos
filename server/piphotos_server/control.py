@@ -618,8 +618,88 @@ class ServerController:
         with sqlite3.connect(str(self.paths.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
-            cur.execute("SELECT id, name, model, slug, created_at, last_seen_at FROM devices WHERE user_id = ?", (user_id,))
-            return [dict(r) for r in cur.fetchall()]
+            try:
+                cur.execute("""
+                    SELECT d.id, d.name, d.model, d.slug, d.created_at, d.last_seen_at,
+                           COALESCE(t.role, 'backup') as role
+                    FROM devices d
+                    LEFT JOIN tokens t ON d.id = t.device_id
+                    WHERE d.user_id = ?
+                    ORDER BY d.created_at ASC
+                """, (user_id,))
+                return [dict(r) for r in cur.fetchall()]
+            except sqlite3.OperationalError:
+                cur.execute("SELECT id, name, model, slug, created_at, last_seen_at FROM devices WHERE user_id = ?", (user_id,))
+                rows = [dict(r) for r in cur.fetchall()]
+                for r in rows:
+                    r["role"] = "backup"
+                return rows
+
+    def set_device_role(self, user_id: str, device_id: str, role: str) -> Dict[str, Any]:
+        """Update role of a device ('manage' or 'backup')."""
+        if role not in ("manage", "backup"):
+            raise ControlError("Device role must be 'manage' or 'backup'", status_code=400)
+        if self.is_running():
+            return self._http_request(
+                "PATCH",
+                f"/api/v1/admin/users/{user_id}/devices/{device_id}",
+                data={"role": role},
+            )
+        else:
+            if not self.paths.db_path.is_file():
+                raise ControlError("Database not found", status_code=404)
+            import sqlite3
+            conn = sqlite3.connect(str(self.paths.db_path))
+            try:
+                cur = conn.cursor()
+                if role == "backup":
+                    cur.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+                    u_row = cur.fetchone()
+                    if u_row and u_row[0] == "owner":
+                        cur.execute("SELECT COUNT(*) FROM tokens WHERE user_id = ? AND role = 'manage' AND device_id != ?", (user_id, device_id))
+                        other_manage = cur.fetchone()[0]
+                        if other_manage == 0:
+                            raise ControlError("Cannot demote owner's last manage-capable device", status_code=400, code="cannot_demote_last_manage_device")
+                cur.execute("UPDATE tokens SET role = ? WHERE device_id = ?", (role, device_id))
+                conn.commit()
+                cur.execute("SELECT id, name, model, slug, created_at, last_seen_at FROM devices WHERE id = ?", (device_id,))
+                d_row = cur.fetchone()
+                if not d_row:
+                    raise ControlError("Device not found", status_code=404)
+                return {
+                    "id": d_row[0], "name": d_row[1], "model": d_row[2],
+                    "slug": d_row[3], "created_at": d_row[4], "last_seen_at": d_row[5],
+                    "role": role,
+                }
+            finally:
+                conn.close()
+
+    def backup_database(self, max_keep: int = 14) -> Path:
+        """Create a point-in-time snapshot of the database."""
+        from .backup import create_database_backup
+        backups_dir = self.paths.data_dir / "backups"
+        return create_database_backup(self.paths.db_path, backups_dir, max_keep=max_keep)
+
+    def restore_database(self, backup_file: Path | str) -> Path:
+        """Restore database from a backup file."""
+        from .backup import restore_database_backup
+        return restore_database_backup(Path(backup_file), self.paths.db_path)
+
+    def list_backups(self) -> List[Dict[str, Any]]:
+        """List available database backups in data/backups/."""
+        backups_dir = self.paths.data_dir / "backups"
+        if not backups_dir.exists():
+            return []
+        items = []
+        for p in sorted(backups_dir.glob("piphotos-*.db"), key=lambda f: f.stat().st_mtime, reverse=True):
+            if p.is_file():
+                items.append({
+                    "path": str(p),
+                    "filename": p.name,
+                    "size_bytes": p.stat().st_size,
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime)),
+                })
+        return items
 
     def delete_device(self, device_id: str) -> Dict[str, Any]:
         """Revoke a registered device."""

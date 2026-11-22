@@ -160,6 +160,7 @@ class MeResponse(BaseModel):
     used_bytes: int
     device_id: str
     device_name: str
+    device_role: str = "backup"
     available_bytes: int = 0
     allocation_bytes: int = 0
     allocation_used_bytes: int = 0
@@ -188,6 +189,11 @@ class DeviceSummary(BaseModel):
     slug: str
     created_at: str
     last_seen_at: Optional[str] = None
+    role: str = "backup"
+
+
+class UpdateDeviceRequest(BaseModel):
+    role: Optional[str] = Field(default=None, pattern="^(manage|backup)$")
 
 
 class OpenPairingResponse(BaseModel):

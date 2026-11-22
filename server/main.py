@@ -65,6 +65,7 @@ from models import (
     UpdateUserRequest,
     InviteResponse,
     DeviceSummary,
+    UpdateDeviceRequest,
     OpenPairingResponse,
     UserOverview,
     AdminOverviewResponse,
@@ -210,7 +211,7 @@ def _require_auth(authorization: Optional[str], request: Optional[Request] = Non
                 if owner is None:
                     owner = next((u for u in users if u.role == "owner"), None)
                 if owner:
-                    return AuthIdentity(user_id=owner.id, device_id="local-admin")
+                    return AuthIdentity(user_id=owner.id, device_id="local-admin", role="manage")
 
     identity = resolve_bearer(db, authorization)
     if identity is None:
@@ -239,6 +240,13 @@ def _require_auth(authorization: Optional[str], request: Optional[Request] = Non
 
 def _require_owner(authorization: Optional[str], request: Optional[Request] = None) -> AuthIdentity:
     identity = _require_auth(authorization, request=request)
+    if identity.user_id == "local-admin" or identity.device_id == "local-admin":
+        return identity
+    if identity.role != "manage":
+        raise HTTPException(status_code=403, detail={
+            "error": "insufficient_device_role",
+            "message": "Device role 'backup' cannot perform management operations",
+        })
     user = db.get_user(identity.user_id)
     if user is None or user.role != UserRole.OWNER:
         raise HTTPException(status_code=403, detail={
@@ -541,7 +549,7 @@ async def pair_device(req: PairRequest, request: Request) -> PairResponse:
         device_slug = slugify(f"{req.device_name}")
         device = db.create_device(user.id, req.device_name, req.device_model, device_slug)
         token = create_bearer_token()
-        db.store_token(hash_token(token), user.id, device.id)
+        db.store_token(hash_token(token), user.id, device.id, role="backup")
         db.audit(user.id, "pair_device_invite", device.id,
                  f"Paired device {req.device_name} ({req.device_model}) via invite")
 
@@ -585,13 +593,19 @@ async def pair_device(req: PairRequest, request: Request) -> PairResponse:
             "message": "No owner user configured",
         })
 
+    # Count existing devices for owner to assign role
+    owner_device_count = db.get_user_device_count(owner.id)
+
     # Create device
     device_slug = slugify(f"{req.device_name}")
     device = db.create_device(owner.id, req.device_name, req.device_model, device_slug)
 
+    # First owner device gets 'manage', subsequent gets 'backup'
+    token_role = "manage" if owner_device_count == 0 else "backup"
+
     # Create token
     token = create_bearer_token()
-    db.store_token(hash_token(token), owner.id, device.id)
+    db.store_token(hash_token(token), owner.id, device.id, role=token_role)
 
     db.audit(owner.id, "pair_device", device.id,
              f"Paired device {req.device_name} ({req.device_model})")
@@ -1066,6 +1080,7 @@ async def get_me(authorization: Optional[str] = Header(None)) -> MeResponse:
         used_bytes=used,
         device_id=dev.id if dev else "",
         device_name=dev.name if dev else "",
+        device_role=identity.role,
         available_bytes=available,
         allocation_bytes=node_alloc,
         allocation_used_bytes=node_used,
@@ -1434,18 +1449,73 @@ async def list_admin_user_devices(
     target = db.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
-    devs = db.list_devices(user_id)
+    devs = db.list_user_devices(user_id)
     return [
         DeviceSummary(
-            id=d.id,
-            name=d.name,
-            model=d.model,
-            slug=d.slug,
-            created_at=d.created_at,
-            last_seen_at=d.last_seen_at,
+            id=d["id"],
+            name=d["name"],
+            model=d["model"],
+            slug=d["slug"],
+            created_at=d["created_at"],
+            last_seen_at=d["last_seen_at"],
+            role=d.get("role", "backup"),
         )
         for d in devs
     ]
+
+
+@app.patch("/api/v1/admin/users/{user_id}/devices/{device_id}")
+async def update_admin_device(
+    user_id: str,
+    device_id: str,
+    req: UpdateDeviceRequest,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> DeviceSummary:
+    _require_owner(authorization, request=request)
+    target = db.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "User not found"})
+    dev = db.get_device(device_id)
+    if dev is None or dev.user_id != user_id:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Device not found"})
+
+    if req.role:
+        current_role = db.get_device_token_role(device_id) or "backup"
+        if req.role == "backup" and current_role == "manage" and target.role == UserRole.OWNER:
+            manage_count = db.count_user_manage_devices(user_id)
+            if manage_count <= 1:
+                raise HTTPException(status_code=400, detail={
+                    "error": "cannot_demote_last_manage_device",
+                    "message": "Cannot demote the owner's last manage-capable device",
+                })
+        db.set_device_token_role(device_id, req.role)
+
+    new_role = db.get_device_token_role(device_id) or "backup"
+    return DeviceSummary(
+        id=dev.id,
+        name=dev.name,
+        model=dev.model,
+        slug=dev.slug,
+        created_at=dev.created_at,
+        last_seen_at=dev.last_seen_at,
+        role=new_role,
+    )
+
+
+@app.delete("/api/v1/admin/users/{user_id}/devices/{device_id}")
+async def delete_admin_user_device(
+    user_id: str,
+    device_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    _require_owner(authorization, request=request)
+    dev = db.get_device(device_id)
+    if dev is None or dev.user_id != user_id:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Device not found"})
+    db.delete_device(device_id)
+    return {"status": "revoked", "device_id": device_id}
 
 
 @app.delete("/api/v1/admin/devices/{device_id}")

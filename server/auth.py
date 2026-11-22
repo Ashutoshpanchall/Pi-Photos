@@ -18,6 +18,7 @@ class AuthIdentity:
     """Resolved identity from a valid Bearer token."""
     user_id: str
     device_id: str
+    role: str = "backup"
 
 
 class IpRateLimiter:
@@ -235,4 +236,4 @@ def resolve_bearer(db: Database, authorization: Optional[str]) -> Optional[AuthI
     row = db.lookup_token(token_hash)
     if row is None:
         return None
-    return AuthIdentity(user_id=row.user_id, device_id=row.device_id)
+    return AuthIdentity(user_id=row.user_id, device_id=row.device_id, role=row.role)

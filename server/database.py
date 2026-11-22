@@ -71,6 +71,7 @@ class TokenRow:
     user_id: str
     device_id: str
     created_at: str
+    role: str = "backup"
 
 
 @dataclass(frozen=True)
@@ -149,7 +150,8 @@ CREATE TABLE IF NOT EXISTS tokens (
     token_hash TEXT PRIMARY KEY,
     user_id    TEXT NOT NULL REFERENCES users(id),
     device_id  TEXT NOT NULL REFERENCES devices(id),
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'backup'
 );
 
 CREATE TABLE IF NOT EXISTS invites (
@@ -220,6 +222,20 @@ class Database:
                 pass
             try:
                 cur.execute("ALTER TABLE invites ADD COLUMN used_at TEXT")
+            except Exception:
+                pass
+
+            try:
+                cur.execute("ALTER TABLE tokens ADD COLUMN role TEXT NOT NULL DEFAULT 'backup'")
+                cur.execute("""
+                    UPDATE tokens SET role = 'manage'
+                    WHERE rowid IN (
+                        SELECT MIN(t.rowid) FROM tokens t
+                        JOIN users u ON t.user_id = u.id
+                        WHERE u.role = 'owner'
+                        GROUP BY t.user_id
+                    )
+                """)
             except Exception:
                 pass
 
@@ -548,12 +564,18 @@ class Database:
 
     # -- tokens --------------------------------------------------------------
 
-    def store_token(self, token_hash: str, user_id: str, device_id: str) -> None:
+    def store_token(self, token_hash: str, user_id: str, device_id: str, role: Optional[str] = None) -> None:
+        if role is None:
+            user = self.get_user(user_id)
+            if user and user.role == "owner" and self.count_user_manage_devices(user_id) == 0:
+                role = "manage"
+            else:
+                role = "backup"
         with self._cursor() as cur:
             cur.execute(
-                "INSERT INTO tokens (token_hash, user_id, device_id, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (token_hash, user_id, device_id, self._now()),
+                "INSERT INTO tokens (token_hash, user_id, device_id, created_at, role) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (token_hash, user_id, device_id, self._now(), role),
             )
 
     def lookup_token(self, token_hash: str) -> Optional[TokenRow]:
@@ -562,10 +584,51 @@ class Database:
             row = cur.fetchone()
             if row is None:
                 return None
+            role = row["role"] if "role" in row.keys() and row["role"] else "backup"
             return TokenRow(
                 row["token_hash"], row["user_id"],
                 row["device_id"], row["created_at"],
+                role=role,
             )
+
+    def get_device_token_role(self, device_id: str) -> Optional[str]:
+        with self._cursor() as cur:
+            cur.execute("SELECT role FROM tokens WHERE device_id = ? LIMIT 1", (device_id,))
+            row = cur.fetchone()
+            return row[0] if row and row[0] else None
+
+    def set_device_token_role(self, device_id: str, role: str) -> None:
+        with self._cursor() as cur:
+            cur.execute("UPDATE tokens SET role = ? WHERE device_id = ?", (role, device_id))
+
+    def count_user_manage_devices(self, user_id: str) -> int:
+        with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM tokens WHERE user_id = ? AND role = 'manage'", (user_id,))
+            return cur.fetchone()[0]
+
+    def list_user_devices(self, user_id: str) -> list[dict]:
+        with self._cursor() as cur:
+            cur.execute("""
+                SELECT d.id, d.name, d.model, d.slug, d.created_at, d.last_seen_at,
+                       COALESCE(t.role, 'backup') as role
+                FROM devices d
+                LEFT JOIN tokens t ON d.id = t.device_id
+                WHERE d.user_id = ?
+                ORDER BY d.created_at ASC
+            """, (user_id,))
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "model": r["model"],
+                    "slug": r["slug"],
+                    "created_at": r["created_at"],
+                    "last_seen_at": r["last_seen_at"],
+                    "role": r["role"],
+                }
+                for r in rows
+            ]
 
     # -- files ---------------------------------------------------------------
 

@@ -30,6 +30,12 @@ dependencies = [
     "httpx>=0.27.0",
 ]
 
+[project.optional-dependencies]
+gui = [
+    "customtkinter>=6.0.0",
+    "pystray>=0.19.5",
+]
+
 [project.scripts]
 piphotos-server = "piphotos_server.cli:main"
 

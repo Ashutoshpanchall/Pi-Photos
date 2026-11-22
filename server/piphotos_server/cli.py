@@ -529,6 +529,49 @@ def cmd_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backup(args: argparse.Namespace) -> int:
+    """Create an online database backup snapshot."""
+    from .control import ServerController
+    ctrl = ServerController(data_dir=args.data_dir)
+    try:
+        bpath = ctrl.backup_database()
+        print(f"Database backup created: {bpath}")
+        backups = ctrl.list_backups()
+        print(f"Total backups retained: {len(backups)} (max 14)")
+        return 0
+    except Exception as e:
+        print(f"Error creating backup: {e}")
+        return 1
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    """Restore database from a backup file."""
+    from .control import ServerController
+    ctrl = ServerController(data_dir=args.data_dir)
+    target_file = Path(args.file)
+    if not target_file.is_file():
+        print(f"Error: Backup file not found: {target_file}")
+        return 1
+
+    if ctrl.is_running():
+        print("Notice: Server is currently running. Restoring database while online.")
+
+    try:
+        safety_copy = ctrl.restore_database(target_file)
+        print(f"Database restored successfully from {target_file}")
+        print(f"Safety snapshot created at: {safety_copy}")
+        return 0
+    except Exception as e:
+        print(f"Error restoring database: {e}")
+        return 1
+
+
+def cmd_app(args: argparse.Namespace) -> int:
+    """Launch the native desktop GUI."""
+    from .gui import launch_gui
+    return launch_gui(data_dir=args.data_dir, start_in_tray=getattr(args, "tray", False))
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build command-line parser with all subcommands."""
     parser = argparse.ArgumentParser(
@@ -617,6 +660,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_cap.add_argument("--force", action="store_true", help="Force setting capacity below current usage")
     p_cap.add_argument("--data-dir", type=str, default=None, help="Data directory")
 
+    # backup
+    p_backup = subparsers.add_parser("backup", help="Create an online database backup snapshot")
+    p_backup.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
+    # restore
+    p_restore = subparsers.add_parser("restore", help="Restore database from a backup file")
+    p_restore.add_argument("file", help="Path to backup database file to restore")
+    p_restore.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
+    # app (desktop GUI)
+    p_app = subparsers.add_parser("app", help="Launch native desktop GUI application")
+    p_app.add_argument("--tray", action="store_true", help="Start minimized to system tray")
+    p_app.add_argument("--data-dir", type=str, default=None, help="Data directory")
+
     # version
     subparsers.add_parser("version", help="Show server software version")
 
@@ -649,6 +706,9 @@ def main(args: Optional[list[str]] = None) -> int:
         "uninstall": cmd_uninstall,
         "doctor": cmd_doctor,
         "set-capacity": cmd_set_capacity,
+        "backup": cmd_backup,
+        "restore": cmd_restore,
+        "app": cmd_app,
     }
 
     handler = handlers.get(parsed.subcommand)
