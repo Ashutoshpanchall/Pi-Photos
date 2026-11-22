@@ -53,13 +53,28 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 # 1. Detect elevation and environment
 # ---------------------------------------------------------------------------
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$isWindows = $false
+try {
+    $isWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+} catch {
+    $isWindows = ($env:OS -like "*Windows*")
+}
+
+if ($isWindows) {
+    try {
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        $isAdmin = $false
+    }
+} else {
+    $isAdmin = $false
+}
 
 if (-not $DataDir) {
     if ($isAdmin) {
-        $effectiveDataDir = Join-Path $env:ProgramData "PiPhotos"
+        $effectiveDataDir = if ($env:ProgramData) { Join-Path $env:ProgramData "PiPhotos" } else { Join-Path $HOME ".local/share/piphotos" }
     } else {
-        $effectiveDataDir = Join-Path $env:LOCALAPPDATA "PiPhotos"
+        $effectiveDataDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "PiPhotos" } else { Join-Path $HOME ".local/share/piphotos" }
     }
 } else {
     $effectiveDataDir = $DataDir
@@ -67,14 +82,14 @@ if (-not $DataDir) {
 
 if (-not $DryRun) {
     try {
-        $pointerDir = Join-Path $env:LOCALAPPDATA "PiPhotos"
+        $pointerDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "PiPhotos" } else { Join-Path $HOME ".config/piphotos" }
         if (-not (Test-Path $pointerDir)) {
             New-Item -ItemType Directory -Force -Path $pointerDir | Out-Null
         }
         $pointerJson = @{ data_dir = $effectiveDataDir; port = $Port } | ConvertTo-Json
         Set-Content -Path (Join-Path $pointerDir "location") -Value $pointerJson -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch {
-        # Non-critical if user profile path is restricted
+        Write-Verbose "Could not persist pointer file: $_"
     }
 }
 

@@ -6,9 +6,13 @@ import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import collections
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 from main import app, ip_limiter, global_pairing_limiter
 import hashlib
+
+DiskUsage = collections.namedtuple("usage", "total used free")
 
 
 class TestU3Simulation:
@@ -32,7 +36,8 @@ class TestU3Simulation:
     def teardown_method(self):
         self._tc.__exit__(None, None, None)
 
-    def test_u3_quota_thresholds_pause_and_resume(self):
+    @patch("shutil.disk_usage", return_value=DiskUsage(100 * 1024**3, 10 * 1024**3, 90 * 1024**3))
+    def test_u3_quota_thresholds_pause_and_resume(self, _mock_disk):
         from main import pairing, db, storage
         # 1. Pair owner
         code = pairing.generate_code()

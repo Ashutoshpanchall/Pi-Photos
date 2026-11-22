@@ -150,7 +150,7 @@ class ServerDoctor:
         try:
             src.write_text("hardlink_test", encoding="utf-8")
             os.link(src, dst)
-            supported = src.stat().st_ino == dst.stat().st_ino
+            supported = os.stat(src).st_ino == os.stat(dst).st_ino
             try:
                 src.unlink(missing_ok=True)
                 dst.unlink(missing_ok=True)

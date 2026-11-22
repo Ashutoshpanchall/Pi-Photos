@@ -77,8 +77,7 @@ class TestServerDoctorChecks:
         doctor = ServerDoctor(doctor_paths)
         fake_stat = os.stat_result((stat.S_IFREG | 0o644, 12345, 1, 1, 1000, 1000, 100, 0, 0, 0))
         with patch("os.link", return_value=None), \
-             patch("os.stat", return_value=fake_stat), \
-             patch.object(Path, "stat", return_value=fake_stat):
+             patch("os.stat", return_value=fake_stat):
             doctor.check_hard_links()
             assert any(r.name == "hard_links" and r.status == "PASS" for r in doctor.results)
 

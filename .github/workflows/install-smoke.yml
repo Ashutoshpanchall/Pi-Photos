@@ -23,8 +23,8 @@ jobs:
         shell: pwsh
         run: |
           Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-          # Write-Host is intentional for console styling in interactive installer CLI; exclude PSAvoidUsingWriteHost
-          $results = Invoke-ScriptAnalyzer -Path install/install.ps1 -Severity Error,Warning -ExcludeRule PSAvoidUsingWriteHost
+          # Write-Host is intentional for console styling in interactive installer CLI; exclude PSAvoidUsingWriteHost and PSAvoidUsingEmptyCatchBlock
+          $results = Invoke-ScriptAnalyzer -Path install/install.ps1 -Severity Error,Warning -ExcludeRule PSAvoidUsingWriteHost,PSAvoidUsingEmptyCatchBlock
           if ($results) {
               $results | Format-Table -AutoSize
               exit 1

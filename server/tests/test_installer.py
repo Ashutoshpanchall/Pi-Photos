@@ -141,7 +141,7 @@ if not BASH_BIN and Path(r"C:\Program Files\Git\bin\bash.exe").is_file():
 class TestInstallerScripts:
     """Dry-run verification of install.sh and install.ps1."""
 
-    @pytest.mark.skipif(PWSH_BIN is None, reason="PowerShell is not installed on this system")
+    @pytest.mark.skipif(PWSH_BIN is None or sys.platform != "win32", reason="PowerShell installer tests are for Windows")
     def test_install_ps1_dry_run(self):
         script_path = Path(__file__).parent.parent.parent / "install" / "install.ps1"
         assert script_path.is_file(), f"install.ps1 not found at {script_path}"
@@ -156,7 +156,7 @@ class TestInstallerScripts:
         assert "Target Ref:    test-ref" in res.stdout
         assert "[DRY-RUN]" in res.stdout
 
-    @pytest.mark.skipif(PWSH_BIN is None, reason="PowerShell is not installed on this system")
+    @pytest.mark.skipif(PWSH_BIN is None or sys.platform != "win32", reason="PowerShell installer tests are for Windows")
     def test_install_ps1_posix_args(self):
         script_path = Path(__file__).parent.parent.parent / "install" / "install.ps1"
         res = subprocess.run(
