@@ -300,6 +300,18 @@ async def lifespan(app: FastAPI):
     # Storage
     storage = StorageManager(config["storage_root"])
 
+    # One-time migration: installs created before the mount marker existed have no
+    # marker, which would make the mount guard refuse every upload. Adopt the
+    # current storage folder once; afterwards a missing marker means a real
+    # unmounted/replaced drive and uploads are refused.
+    migrated_flag = data_dir / ".storage_marker_migrated"
+    if not migrated_flag.exists():
+        storage.ensure_mount_marker()
+        try:
+            migrated_flag.write_text("1\n", encoding="utf-8")
+        except OSError:
+            pass
+
     # Server identity
     server_id = _load_or_create_server_id(data_dir)
 
