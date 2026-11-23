@@ -207,3 +207,44 @@ class TestDeleteUserGracePeriod:
         expired = db.get_users_pending_purge(now.isoformat())
         assert len(expired) == 1
         assert expired[0].id == u1.id
+
+
+class TestMarkerMigrationForExistingInstalls:
+    """Installs that predate the mount marker must keep accepting uploads."""
+
+    def _client(self, tmp_path, monkeypatch):
+        import hashlib
+        from fastapi.testclient import TestClient
+        import main as srv_main
+
+        monkeypatch.setenv("PIPHOTOS_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("PIPHOTOS_STORAGE", str(tmp_path / "storage"))
+        monkeypatch.setenv("PIPHOTOS_DB", str(tmp_path / "p.db"))
+        monkeypatch.setenv("PIPHOTOS_CERTS", str(tmp_path / "certs"))
+        monkeypatch.setenv("PIPHOTOS_CONFIG", str(tmp_path / "config.json"))
+        db = Database(tmp_path / "p.db")
+        owner = db.create_user("Owner", "owner", 0)
+        dev = db.create_device(owner.id, "Pixel", "Pixel", "pixel")
+        tok = "tok-abcdefghijklmnop1234"
+        db.store_token(Database.hash_token(tok), owner.id, dev.id)
+        (tmp_path / "storage").mkdir()
+        data = b"hello photo"
+        sha = hashlib.sha256(data).hexdigest()
+        hdr = {"Authorization": f"Bearer {tok}", "Content-Length": str(len(data))}
+        url = f"/api/v1/upload/{sha}?device={dev.id}&folder=Camera&name=a.jpg"
+        return TestClient(srv_main.app), url, hdr, data
+
+    def test_existing_install_without_marker_can_upload(self, tmp_path, monkeypatch):
+        client, url, hdr, data = self._client(tmp_path, monkeypatch)
+        with client as c:
+            r = c.put(url, headers=hdr, content=data)
+            assert r.status_code != 503, r.text
+            assert (tmp_path / "storage" / ".piphotos-storage").is_file()
+
+    def test_marker_loss_after_migration_still_refuses(self, tmp_path, monkeypatch):
+        client, url, hdr, data = self._client(tmp_path, monkeypatch)
+        with client as c:
+            c.put(url, headers=hdr, content=data)
+            (tmp_path / "storage" / ".piphotos-storage").unlink()
+            r = c.put(url, headers=hdr, content=data)
+            assert r.status_code == 503
